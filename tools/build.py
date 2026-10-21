@@ -36,3 +36,7 @@ out = ROOT / "dist" / ("sigmalens-demo.html" if demo else "sigmalens.html")
 out.parent.mkdir(exist_ok=True)
 out.write_text(html, encoding="utf-8")
 print(f"{out} ({out.stat().st_size // 1024} KB)")
+if demo:
+    # GitHub Pages (sigmalens.n4zar1.com) serves the demo build from the repo root.
+    (ROOT / "index.html").write_text(html, encoding="utf-8")
+    print(f"{ROOT / 'index.html'} (GitHub Pages)")

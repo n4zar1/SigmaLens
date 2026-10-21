@@ -22,7 +22,7 @@ SigmaLens gives you the hunting workflow of a SIEM in a browser tab: a search ba
 1. Download `dist/sigmalens.html` and open it in Chrome, Edge or Firefox.
 2. Drop your logs (`.json`, `.jsonl`) and Sigma rules (`.yml`) onto the page.
 
-To see it with data straight away, open `dist/sigmalens-demo.html` and click **Load demo dataset**. It's a synthetic workstation day with a made-up intrusion and four example rules.
+**Try it online:** https://sigmalens.n4zar1.com (the demo build; your files still never leave the browser). Offline, open `dist/sigmalens-demo.html` and click **Load demo dataset**. It's a synthetic workstation day with a made-up intrusion and four example rules.
 
 ### Getting logs into JSONL
 SigmaLens reads flat JSON objects, one per line. It also reads JSON arrays, and the nested `evtx_dump` / python-evtx format (`{"Event":{"System":…,"EventData":…}}`), which it flattens on load.
