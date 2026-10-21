@@ -1,0 +1,1633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SigmaLens</title>
+<meta name="description" content="Offline log explorer: search Windows event logs and test Sigma rules in the browser.">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0a0e16; --panel: #111826; --panel2: #162033; --line: #223049; --line2: #2c3d5c;
+  --fg: #e6ebf3; --muted: #93a1b8; --faint: #64718a;
+  --accent: #39c0f0; --accent-ink: #04202c; --violet: #a48bfa;
+  --hit: #f5a524; --bad: #f2716f; --good: #3ccf91;
+  --row-hover: rgba(57, 192, 240, .06); --sel: rgba(57, 192, 240, .12);
+  --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f4f6fa; --panel: #ffffff; --panel2: #f0f3f8; --line: #dbe1ea; --line2: #c6cfdc;
+    --fg: #172033; --muted: #56627a; --faint: #8390a6;
+    --accent: #0a7fb0; --accent-ink: #ffffff; --violet: #6d4fd6;
+    --hit: #b36b00; --bad: #c63b39; --good: #13865a;
+    --row-hover: rgba(10, 127, 176, .06); --sel: rgba(10, 127, 176, .1);
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6fa; --panel: #ffffff; --panel2: #f0f3f8; --line: #dbe1ea; --line2: #c6cfdc;
+  --fg: #172033; --muted: #56627a; --faint: #8390a6;
+  --accent: #0a7fb0; --accent-ink: #ffffff; --violet: #6d4fd6;
+  --hit: #b36b00; --bad: #c63b39; --good: #13865a;
+  --row-hover: rgba(10, 127, 176, .06); --sel: rgba(10, 127, 176, .1);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+[hidden] { display: none !important; }
+code, kbd, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
+.brand svg { width: 22px; height: 22px; }
+.brand small { font-weight: 500; color: var(--muted); font-size: 12px; }
+.stat { color: var(--muted); font-size: 12.5px; }
+.stat b { color: var(--fg); font-weight: 600; }
+.spacer { flex: 1; }
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line2); background: var(--panel2); padding: 6px 11px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn.sm { padding: 3px 8px; font-size: 12.5px; }
+select.btn { padding-right: 6px; }
+.tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tab { border: 0; background: none; padding: 10px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; font-weight: 600; }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tab .count { font-weight: 500; color: var(--faint); margin-left: 4px; }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px 16px; gap: 10px; }
+
+/* search bar */
+.qbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.qbar .q { flex: 1 1 420px; min-width: 0; padding: 8px 11px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); font-family: var(--mono); font-size: 13px; }
+.qbar input[type="datetime-local"] { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); font-size: 12.5px; }
+.qbar .utc { color: var(--faint); font-size: 12px; }
+.err { color: var(--bad); font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+.note { color: var(--hit); font-size: 12.5px; }
+
+/* histogram */
+.histo { height: 92px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 4px; position: relative; }
+.histo svg { width: 100%; height: 64px; display: block; }
+.histo rect.bar { fill: var(--accent); opacity: .75; cursor: pointer; }
+.histo rect.bar:hover { opacity: 1; }
+.histo rect.bar.hit { fill: var(--hit); }
+.histo .axis { display: flex; justify-content: space-between; color: var(--faint); font: 11px var(--mono); margin-top: 3px; }
+.histo .empty { color: var(--faint); font-size: 12.5px; padding: 18px 4px; }
+
+/* layout */
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px 1fr; gap: 10px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.panel-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 13px; }
+.panel-h .muted { font-weight: 400; }
+.panel-b { overflow: auto; min-height: 0; flex: 1; }
+.muted { color: var(--muted); }
+
+/* fields */
+.fields input { width: 100%; padding: 5px 8px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); font-size: 12.5px; }
+.field { border-bottom: 1px solid var(--line); }
+.field > button { width: 100%; display: flex; justify-content: space-between; gap: 6px; padding: 5px 10px; border: 0; background: none; cursor: pointer; text-align: left; font-family: var(--mono); font-size: 12px; }
+.field > button:hover { background: var(--row-hover); }
+.field > button span:last-child { color: var(--faint); }
+.field.col > button span:first-child { color: var(--accent); }
+.vals { padding: 2px 8px 8px 10px; }
+.val { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; font-size: 12px; padding: 2px 0; }
+.val .v { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.val .n { color: var(--faint); font-size: 11.5px; }
+.ib { border: 1px solid var(--line2); background: var(--panel2); border-radius: 5px; width: 22px; height: 20px; line-height: 1; cursor: pointer; font-size: 12px; padding: 0; }
+.ib:hover { border-color: var(--accent); color: var(--accent); }
+
+/* results table */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tbl th { position: sticky; top: 0; background: var(--panel2); text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; z-index: 1; }
+.tbl th.sortable { cursor: pointer; }
+.tbl td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; font-family: var(--mono); font-size: 12px; }
+.tbl tr.row { cursor: pointer; }
+.tbl tr.row:hover td { background: var(--row-hover); }
+.tbl tr.row.open td { background: var(--sel); }
+.tbl td.time { white-space: nowrap; color: var(--muted); }
+.tbl td.det { word-break: break-all; }
+.chan { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; border: 1px solid var(--line2); color: var(--muted); white-space: nowrap; }
+.kv { display: grid; grid-template-columns: minmax(140px, max-content) 1fr auto; gap: 2px 12px; padding: 8px 10px 10px 18px; }
+.kv .k { color: var(--accent); font-family: var(--mono); font-size: 12px; }
+.kv .v { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.kv .a { display: flex; gap: 3px; }
+.more { padding: 10px; text-align: center; }
+.tools { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+
+/* sigma */
+.sigma { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(380px, 46%) 1fr; gap: 10px; }
+.ed-wrap { flex: 1; min-height: 0; display: flex; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+.gutter { padding: 8px 6px 8px 0; min-width: 42px; text-align: right; color: var(--faint); background: var(--panel2); border-right: 1px solid var(--line); overflow: hidden; user-select: none; white-space: pre; }
+.gutter .bad { color: var(--bad); font-weight: 700; }
+textarea.ed { flex: 1; border: 0; resize: none; padding: 8px 10px; background: var(--panel); outline: none; font: inherit; line-height: inherit; white-space: pre; overflow: auto; tab-size: 4; }
+.ruleinfo { padding: 8px 10px; border-top: 1px solid var(--line); font-size: 12.5px; display: grid; gap: 3px; max-height: 40%; overflow: auto; }
+.lvl { display: inline-block; padding: 0 7px; border-radius: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; border: 1px solid currentColor; }
+.lvl.critical, .lvl.high { color: var(--bad); }
+.lvl.medium { color: var(--hit); }
+.lvl.low, .lvl.informational { color: var(--accent); }
+.hitcount { font-size: 22px; font-weight: 700; }
+.hitcount.zero { color: var(--muted); }
+.hitcount.some { color: var(--hit); }
+
+/* rules list */
+.rules td { font-family: var(--sans); font-size: 13px; }
+.rules td.n { font-family: var(--mono); text-align: right; }
+
+/* empty / drop */
+.welcome { margin: auto; max-width: 560px; text-align: center; padding: 30px 20px; }
+.welcome h1 { font-size: 26px; margin: 10px 0 6px; letter-spacing: -.02em; }
+.welcome p { color: var(--muted); }
+.welcome .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+.drop { position: fixed; inset: 0; background: rgba(5, 10, 20, .7); display: grid; place-items: center; z-index: 50; pointer-events: none; }
+.drop div { border: 2px dashed var(--accent); border-radius: 16px; padding: 40px 60px; color: #fff; font-size: 18px; font-weight: 600; background: rgba(57, 192, 240, .08); }
+.busy { position: fixed; bottom: 16px; right: 16px; background: var(--panel); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 12px; z-index: 60; }
+
+dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line2); border-radius: 12px; max-width: 680px; padding: 18px 22px; }
+dialog::backdrop { background: rgba(0, 0, 0, .5); }
+dialog h2 { margin: 0 0 8px; font-size: 18px; }
+dialog h3 { margin: 16px 0 4px; font-size: 14px; }
+dialog table { border-collapse: collapse; width: 100%; font-size: 13px; }
+dialog td { padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+dialog td:first-child { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .split, .sigma { grid-template-columns: 1fr; }
+  .split .fields { max-height: 220px; }
+  .sigma .panel:first-child { min-height: 360px; }
+}
+
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M13 7.6H8.4l2.5 2.9-2.5 2.9H13" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    SigmaLens <small>offline log explorer</small>
+  </div>
+  <span class="stat" id="stat">No data loaded</span>
+  <span class="spacer"></span>
+  <label class="stat" for="profile">Mapping</label>
+  <select class="btn" id="profile" title="Which events Sigma's process_creation category reads"></select>
+  <button class="btn" id="open">Open files</button>
+  <input type="file" id="file" multiple accept=".json,.jsonl,.ndjson,.yml,.yaml" hidden>
+  <button class="btn ghost" id="help" title="Search and Sigma syntax">?</button>
+  <button class="btn ghost" id="theme" title="Toggle light/dark">◐</button>
+</header>
+<nav class="tabs" role="tablist">
+  <button class="tab" role="tab" data-view="search" aria-selected="true">Search</button>
+  <button class="tab" role="tab" data-view="sigma" aria-selected="false">Sigma editor</button>
+  <button class="tab" role="tab" data-view="rules" aria-selected="false">Rules <span class="count" id="rulecount">0</span></button>
+</nav>
+
+<main>
+  <section class="view" id="welcome">
+    <div class="welcome">
+      <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true" style="color:var(--accent)"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <h1>Hunt through logs like in a SIEM</h1>
+      <p>Drop <b>JSON / JSONL</b> event logs and <b>Sigma</b> rules (.yml) anywhere on this page. Everything stays in your browser: nothing is uploaded.</p>
+      <div class="row">
+        <button class="btn primary" id="open2">Open files</button>
+        <button class="btn" id="demo" hidden>Load demo dataset</button>
+      </div>
+      <p style="margin-top:22px;font-size:12.5px">Convert .evtx first with <code>tools/evtx2jsonl.ps1</code>, or load <code>evtx_dump</code> / Chainsaw JSON output directly.</p>
+    </div>
+  </section>
+
+  <section class="view" id="view-search" hidden>
+    <div class="qbar">
+      <input class="q" id="q" placeholder='Search… e.g. EventID:1 AND Image:*\powershell.exe AND NOT User:*SYSTEM' spellcheck="false" autocomplete="off" aria-label="Search query">
+      <input type="datetime-local" id="from" step="1" aria-label="From (UTC)">
+      <input type="datetime-local" id="to" step="1" aria-label="To (UTC)">
+      <span class="utc">UTC</span>
+      <button class="btn primary" id="run">Search</button>
+      <button class="btn ghost" id="clear" title="Clear search and time range">Reset</button>
+    </div>
+    <div class="err" id="qerr" hidden></div>
+    <div class="histo" id="histo"></div>
+    <div class="split">
+      <aside class="panel fields">
+        <div class="panel-h">Fields <span class="muted" id="fieldcount"></span></div>
+        <div style="padding:8px 8px 6px"><input id="ffilter" placeholder="Filter fields" aria-label="Filter fields"></div>
+        <div class="panel-b" id="fields"></div>
+      </aside>
+      <div class="panel">
+        <div class="panel-h"><span id="rescount">0 events</span>
+          <div class="tools"><button class="btn sm" id="export">Export CSV</button></div>
+        </div>
+        <div class="panel-b" id="results"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-sigma" hidden>
+    <div class="sigma">
+      <div class="panel">
+        <div class="panel-h">Rule
+          <div class="tools">
+            <label class="muted" style="font-weight:400;font-size:12.5px"><input type="checkbox" id="live" checked> live</label>
+            <button class="btn sm" id="loadrule">Load .yml</button>
+            <button class="btn sm" id="saverule">Save to Rules</button>
+            <button class="btn sm primary" id="runrule" title="Ctrl+Enter">Run ▶</button>
+          </div>
+        </div>
+        <div class="ed-wrap"><div class="gutter" id="gutter">1</div><textarea class="ed" id="editor" spellcheck="false" autocomplete="off" aria-label="Sigma rule editor"></textarea></div>
+        <div class="ruleinfo" id="ruleinfo"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="hitcount zero" id="hitcount">–</span><span class="muted" id="hitlabel">Run a rule to see its matches</span>
+          <div class="tools"><button class="btn sm" id="hits2search" title="Open these events in Search">Show in Search</button></div>
+        </div>
+        <div class="panel-b" id="sigma-results"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-rules" hidden>
+    <div class="qbar">
+      <button class="btn" id="loadrules">Load rules</button>
+      <button class="btn primary" id="runall">Run all</button>
+      <span class="muted" style="font-size:12.5px">Rules run against every loaded event with the current mapping.</span>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="panel-b" id="rules"></div>
+    </div>
+  </section>
+</main>
+
+<div class="drop" id="drop" hidden><div>Drop logs (.json, .jsonl) or Sigma rules (.yml)</div></div>
+<div class="busy" id="busy" hidden></div>
+
+<dialog id="helpdlg">
+  <h2>Syntax</h2>
+  <h3>Search</h3>
+  <table>
+    <tr><td>EventID:1</td><td>field equals value (case-insensitive)</td></tr>
+    <tr><td>Image:*\cmd.exe</td><td><code>*</code> is a wildcard (contains: <code>*text*</code>)</td></tr>
+    <tr><td>CommandLine:"*-w hidden*"</td><td>quotes keep spaces in one value</td></tr>
+    <tr><td>whoami</td><td>free text: any field contains it</td></tr>
+    <tr><td>A AND B · A OR B · NOT A</td><td>also <code>&amp;&amp;</code> <code>||</code> <code>!</code> or a leading <code>-</code>; terms side by side mean AND</td></tr>
+    <tr><td>DestinationPort:&gt;=1024</td><td>numeric comparison</td></tr>
+    <tr><td>_exists_:QueryName · Field:*</td><td>field present and not empty</td></tr>
+  </table>
+  <h3>Sigma</h3>
+  <p class="muted" style="margin:4px 0">Supports maps and lists of maps, keyword lists, <code>condition</code> with and/or/not, parentheses, <code>1 of x*</code>, <code>all of them</code>; modifiers <code>contains startswith endswith all re i m s cased exists gt gte lt lte cidr windash</code>. Values use Sigma escaping: <code>*</code> and <code>?</code> are wildcards, <code>\*</code> is a literal asterisk. Not supported: aggregations, correlations, base64 modifiers.</p>
+  <p class="muted" style="margin:4px 0"><b>Mapping</b> decides which events <code>process_creation</code> reads: Sysmon EID 1, Security 4688 (with Image/ParentImage/User mapped from 4688 fields) or both. Other categories follow Sysmon event IDs; <code>ps_script</code> is PowerShell 4104.</p>
+  <div style="text-align:right;margin-top:14px"><button class="btn" id="helpclose">Close</button></div>
+</dialog>
+
+<script>
+/*
+ * SigmaLens engine. No dependencies; runs in the browser and in Node.
+ *  - parseYaml / parseYamlDocs: the YAML subset used by Sigma rules
+ *  - loadEvents: JSON / JSONL / evtx_dump-style JSON -> flat records
+ *  - compileQuery: Lucene-like search language
+ *  - compileRule: Sigma rule -> matcher (detection, condition, modifiers, logsource mapping)
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.SigmaLens = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  class SLError extends Error {
+    constructor(msg, line) {
+      super(line ? `line ${line}: ${msg}` : msg);
+      this.line = line || null;
+    }
+  }
+
+  // ───────────────────────── YAML (Sigma subset) ─────────────────────────
+
+  function stripComment(line) {
+    let q = null;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (q === '"' && c === '\\') { i++; continue; }
+        if (c === q) {
+          if (q === "'" && line[i + 1] === "'") { i++; continue; }
+          q = null;
+        }
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        const prev = line.slice(0, i).trimEnd();
+        if (prev === '' || /[:\-[,{]$/.test(prev)) q = c;
+        continue;
+      }
+      if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+    }
+    return line;
+  }
+
+  function yamlLines(src) {
+    const out = [];
+    String(src).replace(/^﻿/, '').replace(/\r\n?/g, '\n').split('\n').forEach((raw, idx) => {
+      if (/^(---|\.\.\.)\s*$/.test(raw)) { out.push({ doc: true, no: idx + 1 }); return; }
+      const t = stripComment(raw.replace(/\t/g, '  '));
+      if (!t.trim()) return;
+      out.push({ indent: t.length - t.trimStart().length, text: t.trim(), raw, no: idx + 1 });
+    });
+    return out;
+  }
+
+  function splitKV(text) {
+    let q = null;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (q === '"' && c === '\\') { i++; continue; }
+        if (c === q) q = null;
+        continue;
+      }
+      if ((c === '"' || c === "'") && i === 0) { q = c; continue; }
+      if (c === ':' && (i + 1 === text.length || text[i + 1] === ' ')) {
+        let k = text.slice(0, i).trim();
+        if (/^(['"]).*\1$/.test(k)) k = parseScalar(k);
+        return [k, text.slice(i + 1).trim()];
+      }
+    }
+    return null;
+  }
+
+  function splitFlow(s, no) {
+    const items = [];
+    let q = null, depth = 0, cur = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (q) {
+        cur += c;
+        if (q === '"' && c === '\\') { cur += s[++i] || ''; continue; }
+        if (c === q) q = null;
+        continue;
+      }
+      if (c === '"' || c === "'") { q = c; cur += c; continue; }
+      if (c === '[' || c === '{') depth++;
+      if (c === ']' || c === '}') depth--;
+      if (c === ',' && depth === 0) { items.push(cur.trim()); cur = ''; continue; }
+      cur += c;
+    }
+    if (q || depth) throw new SLError('unterminated flow collection', no);
+    if (cur.trim()) items.push(cur.trim());
+    return items;
+  }
+
+  function parseScalar(s, no) {
+    if (s === '' || s === '~' || /^(null|Null|NULL)$/.test(s)) return null;
+    if (s[0] === "'") {
+      if (s.length < 2 || s[s.length - 1] !== "'") throw new SLError('unterminated single-quoted string', no);
+      return s.slice(1, -1).replace(/''/g, "'");
+    }
+    if (s[0] === '"') {
+      if (s.length < 2 || s[s.length - 1] !== '"') throw new SLError('unterminated double-quoted string', no);
+      const map = { n: '\n', t: '\t', r: '\r', 0: '\0', '\\': '\\', '"': '"', '/': '/' };
+      return s.slice(1, -1).replace(/\\(.)/g, (m, c) => (c in map ? map[c] : c));
+    }
+    if (s[0] === '[') {
+      if (s[s.length - 1] !== ']') throw new SLError('unterminated flow list', no);
+      return splitFlow(s.slice(1, -1), no).map((x) => parseScalar(x, no));
+    }
+    if (s[0] === '{') {
+      if (s[s.length - 1] !== '}') throw new SLError('unterminated flow map', no);
+      const o = {};
+      for (const part of splitFlow(s.slice(1, -1), no)) {
+        const kv = splitKV(part);
+        if (!kv) throw new SLError('expected "key: value" in flow map', no);
+        o[kv[0]] = parseScalar(kv[1], no);
+      }
+      return o;
+    }
+    return s; // numbers and booleans stay strings: matching is string based
+  }
+
+  const isItem = (t) => t === '-' || t.startsWith('- ');
+  const live = (L, i) => i < L.length && !L[i].doc;
+
+  function parseNode(L, i, indent) {
+    return isItem(L[i].text) ? parseList(L, i, indent) : parseMap(L, i, indent);
+  }
+
+  function parseList(L, i, indent) {
+    const arr = [];
+    while (live(L, i) && L[i].indent === indent && isItem(L[i].text)) {
+      const text = L[i].text;
+      const rest = text.slice(1).trim();
+      const restCol = indent + (text.length - text.slice(1).trimStart().length);
+      if (rest === '') {
+        if (live(L, i + 1) && L[i + 1].indent > indent) {
+          const [v, j] = parseNode(L, i + 1, L[i + 1].indent);
+          arr.push(v); i = j;
+        } else { arr.push(null); i++; }
+      } else if (rest[0] !== '[' && rest[0] !== '{' && splitKV(rest)) {
+        L[i] = { indent: restCol, text: rest, raw: L[i].raw, no: L[i].no };
+        const [v, j] = parseMap(L, i, restCol);
+        arr.push(v); i = j;
+      } else {
+        arr.push(parseScalar(rest, L[i].no)); i++;
+      }
+    }
+    if (live(L, i) && L[i].indent > indent) throw new SLError('bad indentation', L[i].no);
+    return [arr, i];
+  }
+
+  function parseMap(L, i, indent) {
+    const obj = {};
+    while (live(L, i) && L[i].indent === indent && !isItem(L[i].text)) {
+      const kv = splitKV(L[i].text);
+      if (!kv) throw new SLError(`expected "key: value", got "${L[i].text}"`, L[i].no);
+      const [k, rest] = kv;
+      const no = L[i].no;
+      if (Object.prototype.hasOwnProperty.call(obj, k)) throw new SLError(`duplicate key "${k}"`, no);
+      i++;
+      if (rest === '') {
+        if (live(L, i) && L[i].indent > indent) { const [v, j] = parseNode(L, i, L[i].indent); obj[k] = v; i = j; }
+        else if (live(L, i) && L[i].indent === indent && isItem(L[i].text)) { const [v, j] = parseList(L, i, indent); obj[k] = v; i = j; }
+        else obj[k] = null;
+      } else if (/^[|>][+-]?$/.test(rest)) {
+        const parts = [];
+        while (live(L, i) && L[i].indent > indent) { parts.push(L[i].raw.trim()); i++; }
+        obj[k] = rest[0] === '|' ? parts.join('\n') : parts.join(' ');
+      } else {
+        obj[k] = parseScalar(rest, no);
+      }
+    }
+    if (live(L, i) && L[i].indent > indent) throw new SLError('bad indentation', L[i].no);
+    return [obj, i];
+  }
+
+  function parseYamlDocs(src) {
+    const docs = [];
+    let cur = [];
+    for (const l of yamlLines(src)) {
+      if (l.doc) { if (cur.length) docs.push(cur); cur = []; } else cur.push(l);
+    }
+    if (cur.length) docs.push(cur);
+    return docs.map((L) => {
+      const [v, i] = parseNode(L, 0, L[0].indent);
+      if (i < L.length) throw new SLError('unexpected content', L[i].no);
+      return v;
+    });
+  }
+
+  function parseYaml(src) {
+    const docs = parseYamlDocs(src);
+    if (docs.length !== 1) throw new SLError(`expected one YAML document, found ${docs.length}`);
+    return docs[0];
+  }
+
+  // ───────────────────────── Events ─────────────────────────
+
+  const TIME_FIELDS = ['@timestamp', 'TimeCreated', 'SystemTime', 'UtcTime', 'timestamp', 'Timestamp', 'time'];
+
+  function parseTime(v) {
+    if (v == null || v === '') return NaN;
+    let s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) {
+      s = s.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1');
+      if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
+    }
+    return Date.parse(s);
+  }
+
+  function flatten(o, prefix, out) {
+    for (const [k, v] of Object.entries(o)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, key, out);
+      else if (Array.isArray(v)) out[key] = v.every((x) => x === null || typeof x !== 'object') ? v.join(', ') : JSON.stringify(v);
+      else out[key] = v;
+    }
+    return out;
+  }
+
+  // evtx_dump / python-evtx JSON: {"Event":{"System":{...},"EventData":{...}}}
+  function fromEvtxJson(e) {
+    const sys = e.System || {};
+    const attr = (x, a) => (x && typeof x === 'object' ? (x['#attributes'] || {})[a] : undefined);
+    const text = (x) => (x && typeof x === 'object' ? x['#text'] : x);
+    const out = {
+      '@timestamp': attr(sys.TimeCreated, 'SystemTime'),
+      EventID: text(sys.EventID),
+      Channel: sys.Channel,
+      Computer: sys.Computer,
+      EventRecordID: sys.EventRecordID,
+      Provider: attr(sys.Provider, 'Name'),
+    };
+    for (const part of [e.EventData, e.UserData]) {
+      if (!part || typeof part !== 'object') continue;
+      const clean = Object.assign({}, part);
+      delete clean['#attributes'];
+      flatten(clean, '', out);
+    }
+    return out;
+  }
+
+  function normalizeEvent(o) {
+    if (o && o.Event && typeof o.Event === 'object' && o.Event.System) return fromEvtxJson(o.Event);
+    return flatten(o, '', {});
+  }
+
+  class Rec {
+    constructor(ev, t, src, i) { this.ev = ev; this.t = t; this.src = src; this.i = i; this._x = null; }
+    text() {
+      if (this._x === null) {
+        this._x = Object.values(this.ev).map((v) => (v == null ? '' : String(v))).join('\n').toLowerCase();
+      }
+      return this._x;
+    }
+  }
+
+  function loadEvents(text, src, startIndex) {
+    const recs = [];
+    const errors = [];
+    let objs = [];
+    const s = String(text).replace(/^﻿/, '').trim();
+    if (!s) return { recs, errors };
+    if (s[0] === '[') {
+      try { objs = JSON.parse(s); } catch (e) { errors.push(`${src}: invalid JSON array (${e.message})`); }
+    } else {
+      s.split(/\r?\n/).forEach((line, n) => {
+        if (!line.trim()) return;
+        try { objs.push(JSON.parse(line)); } catch (e) { if (errors.length < 20) errors.push(`${src}:${n + 1}: invalid JSON line`); }
+      });
+    }
+    let i = startIndex || 0;
+    for (const o of objs) {
+      if (!o || typeof o !== 'object') continue;
+      const ev = normalizeEvent(o);
+      let t = NaN;
+      for (const f of TIME_FIELDS) { if (ev[f] != null && ev[f] !== '') { t = parseTime(ev[f]); if (!isNaN(t)) break; } }
+      recs.push(new Rec(ev, t, src, i++));
+    }
+    return { recs, errors };
+  }
+
+  // ───────────────────────── Patterns ─────────────────────────
+
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Sigma value syntax: * and ? are wildcards; \* \? \\ escape them.
+  function sigmaPattern(v) {
+    let src = '', lit = '', wild = false;
+    for (let i = 0; i < v.length; i++) {
+      const c = v[i];
+      if (c === '\\' && i + 1 < v.length && '*?\\'.includes(v[i + 1])) { const n = v[++i]; src += escRe(n); lit += n; continue; }
+      if (c === '*') { src += '.*'; wild = true; continue; }
+      if (c === '?') { src += '.'; wild = true; continue; }
+      src += escRe(c); lit += c;
+    }
+    return { src, lit, wild };
+  }
+
+  // kind: exact | contains | startswith | endswith
+  function textMatcher(pat, kind, cased) {
+    if (!pat.wild) {
+      const want = cased ? pat.lit : pat.lit.toLowerCase();
+      const norm = cased ? (x) => x : (x) => x.toLowerCase();
+      switch (kind) {
+        case 'contains': return (x) => norm(x).includes(want);
+        case 'startswith': return (x) => norm(x).startsWith(want);
+        case 'endswith': return (x) => norm(x).endsWith(want);
+        default: return (x) => norm(x) === want;
+      }
+    }
+    const pre = kind === 'contains' || kind === 'endswith' ? '.*' : '';
+    const post = kind === 'contains' || kind === 'startswith' ? '.*' : '';
+    const re = new RegExp(`^(?:${pre}${pat.src}${post})$`, cased ? 's' : 'is');
+    return (x) => re.test(x);
+  }
+
+  function ipv4ToInt(ip) {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip).trim());
+    if (!m) return null;
+    const p = m.slice(1).map(Number);
+    if (p.some((x) => x > 255)) return null;
+    return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+  }
+
+  // ───────────────────────── Search language ─────────────────────────
+  // field:value · field:"phrase with spaces" · field:*part* · field:>=10 · _exists_:field
+  // free text · AND / OR / NOT (also && || ! and a leading -) · parentheses. Implicit AND.
+
+  function tokenizeQuery(q) {
+    const toks = [];
+    let i = 0;
+    while (i < q.length) {
+      const c = q[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '(' || c === ')') { toks.push({ t: c }); i++; continue; }
+      if (q.startsWith('&&', i)) { toks.push({ t: 'AND' }); i += 2; continue; }
+      if (q.startsWith('||', i)) { toks.push({ t: 'OR' }); i += 2; continue; }
+      if ((c === '!' || c === '-') && i + 1 < q.length && !/\s/.test(q[i + 1]) && (i === 0 || /[\s(]/.test(q[i - 1]))) {
+        toks.push({ t: 'NOT' }); i++; continue;
+      }
+      // a term: [field:]value
+      let field = null;
+      const fm = /^([@A-Za-z_][\w.@\-]*):/.exec(q.slice(i));
+      if (fm) { field = fm[1]; i += fm[0].length; }
+      let value = '', quoted = false;
+      if (q[i] === '"') {
+        quoted = true; i++;
+        while (i < q.length && q[i] !== '"') {
+          if (q[i] === '\\' && (q[i + 1] === '"' || q[i + 1] === '\\')) { value += q[i + 1]; i += 2; continue; }
+          value += q[i++];
+        }
+        if (q[i] !== '"') throw new SLError('unterminated quote in search');
+        i++;
+      } else {
+        while (i < q.length && !/[\s()]/.test(q[i])) value += q[i++];
+      }
+      if (!field && !quoted && /^(AND|OR|NOT)$/.test(value)) { toks.push({ t: value }); continue; }
+      if (field && value === '' && !quoted) throw new SLError(`missing value after "${field}:"`);
+      toks.push({ t: 'TERM', field, value, quoted });
+    }
+    return toks;
+  }
+
+  function compileQuery(q, fieldIndex) {
+    const query = String(q || '').trim();
+    if (!query) return () => true;
+    const toks = tokenizeQuery(query);
+    let p = 0;
+    const peek = () => toks[p];
+    const resolve = (f) => (fieldIndex && fieldIndex.get(f.toLowerCase())) || f;
+
+    function term(tok) {
+      const v = tok.value;
+      if (tok.field === '_exists_') {
+        const f = resolve(v);
+        return (r) => r.ev[f] != null && r.ev[f] !== '';
+      }
+      if (!tok.field) {
+        if (v.includes('*')) {
+          const re = new RegExp(v.split('*').map(escRe).join('.*'), 'is');
+          return (r) => re.test(r.text());
+        }
+        const want = v.toLowerCase();
+        return (r) => r.text().includes(want);
+      }
+      const f = resolve(tok.field);
+      const cmp = !tok.quoted && /^(>=|<=|>|<)(.+)$/.exec(v);
+      if (cmp) {
+        const op = cmp[1], raw = cmp[2], num = Number(raw);
+        const useNum = !isNaN(num);
+        return (r) => {
+          const x = r.ev[f];
+          if (x == null || x === '') return false;
+          const a = useNum ? Number(x) : String(x), b = useNum ? num : raw;
+          if (useNum && isNaN(a)) return false;
+          return op === '>' ? a > b : op === '<' ? a < b : op === '>=' ? a >= b : a <= b;
+        };
+      }
+      if (v === '*' && !tok.quoted) return (r) => r.ev[f] != null && r.ev[f] !== '';
+      const m = v.includes('*')
+        ? (() => { const re = new RegExp(`^${v.split('*').map(escRe).join('.*')}$`, 'is'); return (x) => re.test(x); })()
+        : (() => { const want = v.toLowerCase(); return (x) => x.toLowerCase() === want; })();
+      return (r) => { const x = r.ev[f]; return x != null && m(String(x)); };
+    }
+
+    function parseOr() {
+      let left = parseAnd();
+      while (peek() && peek().t === 'OR') { p++; const a = left, b = parseAnd(); left = (r) => a(r) || b(r); }
+      return left;
+    }
+    function parseAnd() {
+      let left = parseNot();
+      while (peek() && peek().t !== 'OR' && peek().t !== ')') {
+        if (peek().t === 'AND') p++;
+        const a = left, b = parseNot();
+        left = (r) => a(r) && b(r);
+      }
+      return left;
+    }
+    function parseNot() {
+      if (peek() && peek().t === 'NOT') { p++; const a = parseNot(); return (r) => !a(r); }
+      return parseAtom();
+    }
+    function parseAtom() {
+      const tok = toks[p++];
+      if (!tok) throw new SLError('search ends unexpectedly');
+      if (tok.t === '(') {
+        const e = parseOr();
+        if (!peek() || peek().t !== ')') throw new SLError('missing ")" in search');
+        p++;
+        return e;
+      }
+      if (tok.t === 'TERM') return term(tok);
+      throw new SLError(`unexpected "${tok.t}" in search`);
+    }
+    const fn = parseOr();
+    if (p < toks.length) throw new SLError(`unexpected "${toks[p].t === 'TERM' ? toks[p].value : toks[p].t}" in search`);
+    return fn;
+  }
+
+  // ───────────────────────── Sigma ─────────────────────────
+
+  const CH = {
+    sysmon: 'Microsoft-Windows-Sysmon/Operational',
+    security: 'Security',
+    system: 'System',
+    application: 'Application',
+    powershell: 'Microsoft-Windows-PowerShell/Operational',
+    'powershell-classic': 'Windows PowerShell',
+    taskscheduler: 'Microsoft-Windows-TaskScheduler/Operational',
+    windefend: 'Microsoft-Windows-Windows Defender/Operational',
+    bits: 'Microsoft-Windows-Bits-Client/Operational',
+    wmi: 'Microsoft-Windows-WMI-Activity/Operational',
+  };
+
+  // category -> [channel, eventIDs[]]
+  const CATEGORIES = {
+    process_creation: [[CH.sysmon, [1]]],
+    process_termination: [[CH.sysmon, [5]]],
+    network_connection: [[CH.sysmon, [3]]],
+    driver_load: [[CH.sysmon, [6]]],
+    image_load: [[CH.sysmon, [7]]],
+    create_remote_thread: [[CH.sysmon, [8]]],
+    raw_access_thread: [[CH.sysmon, [9]]],
+    process_access: [[CH.sysmon, [10]]],
+    file_event: [[CH.sysmon, [11]]],
+    registry_add: [[CH.sysmon, [12]]],
+    registry_delete: [[CH.sysmon, [12]]],
+    registry_set: [[CH.sysmon, [13]]],
+    registry_rename: [[CH.sysmon, [14]]],
+    registry_event: [[CH.sysmon, [12, 13, 14]]],
+    create_stream_hash: [[CH.sysmon, [15]]],
+    pipe_created: [[CH.sysmon, [17, 18]]],
+    wmi_event: [[CH.sysmon, [19, 20, 21]]],
+    dns_query: [[CH.sysmon, [22]]],
+    file_delete: [[CH.sysmon, [23, 26]]],
+    file_change: [[CH.sysmon, [2]]],
+    ps_script: [[CH.powershell, [4104]]],
+    ps_module: [[CH.powershell, [4103]]],
+    ps_classic_start: [[CH['powershell-classic'], [400]]],
+    ps_classic_provider_start: [[CH['powershell-classic'], [600]]],
+  };
+
+  // Security 4688 fields under Sigma's process_creation names
+  const SECURITY_4688_ALIASES = {
+    Image: (ev) => ev.NewProcessName,
+    ParentImage: (ev) => ev.ParentProcessName,
+    ProcessId: (ev) => ev.NewProcessId,
+    User: (ev) => (ev.SubjectUserName ? `${ev.SubjectDomainName ? ev.SubjectDomainName + '\\' : ''}${ev.SubjectUserName}` : undefined),
+  };
+
+  const PROFILES = {
+    sysmon: { label: 'Sysmon (process_creation = Sysmon 1)', processCreation: [[CH.sysmon, [1]]] },
+    security: { label: 'Security (process_creation = 4688)', processCreation: [[CH.security, [4688]]] },
+    both: { label: 'Sysmon 1 + Security 4688', processCreation: [[CH.sysmon, [1]], [CH.security, [4688]]] },
+  };
+
+  function logsourceFilter(ls, profileName) {
+    const profile = PROFILES[profileName] || PROFILES.sysmon;
+    const notes = [];
+    if (!ls || typeof ls !== 'object') return { fn: () => true, notes: ['no logsource: rule runs on every event'] };
+    const product = ls.product ? String(ls.product).toLowerCase() : null;
+    const category = ls.category ? String(ls.category).toLowerCase() : null;
+    const service = ls.service ? String(ls.service).toLowerCase() : null;
+    if (product && product !== 'windows') notes.push(`product "${product}" is not mapped: matching on all events`);
+
+    let pairs = null;
+    if (category) {
+      pairs = category === 'process_creation' ? profile.processCreation : CATEGORIES[category];
+      if (!pairs) notes.push(`category "${category}" is not mapped: matching on all events`);
+    }
+    let svcChannel = null;
+    if (service) {
+      svcChannel = CH[service];
+      if (!svcChannel) notes.push(`service "${service}" is not mapped: ignoring it`);
+    }
+    const sets = pairs ? pairs.map(([ch, ids]) => [ch.toLowerCase(), new Set(ids)]) : null;
+    const svc = svcChannel ? svcChannel.toLowerCase() : null;
+    const aliasFor = (ev) => (String(ev.Channel || '').toLowerCase() === 'security' && Number(ev.EventID) === 4688 ? SECURITY_4688_ALIASES : null);
+    const desc = [
+      sets ? pairs.map(([ch, ids]) => `${ch} EventID ${ids.join('/')}`).join(' or ') : null,
+      svc ? `Channel ${svcChannel}` : null,
+    ].filter(Boolean).join(' and ') || 'all events';
+    return {
+      fn: (ev) => {
+        const ch = String(ev.Channel || '').toLowerCase();
+        if (svc && ch !== svc) return false;
+        if (sets) {
+          const id = Number(ev.EventID);
+          return sets.some(([c, ids]) => c === ch && ids.has(id));
+        }
+        return true;
+      },
+      aliasFor,
+      desc,
+      notes,
+    };
+  }
+
+  const KNOWN_MODS = new Set(['contains', 'startswith', 'endswith', 'all', 're', 'i', 'm', 's', 'cased', 'exists', 'gt', 'gte', 'lt', 'lte', 'cidr', 'windash']);
+
+  function windashVariants(v) {
+    const dashes = ['-', '/', '–', '—', '―'];
+    if (!/(^|\s)-/.test(v)) return [v];
+    return dashes.map((d) => v.replace(/(^|\s)-/g, `$1${d}`));
+  }
+
+  function valueMatcher(raw, mods) {
+    const cased = mods.includes('cased');
+    if (mods.includes('exists')) {
+      const want = String(raw).toLowerCase() !== 'false';
+      return { exists: true, fn: (x) => (x !== undefined && x !== null) === want };
+    }
+    if (raw === null) return { fn: (x) => x === undefined || x === null || x === '' };
+    const v = String(raw);
+    if (mods.includes('re')) {
+      let flags = '';
+      if (mods.includes('i')) flags += 'i';
+      if (mods.includes('m')) flags += 'm';
+      if (mods.includes('s')) flags += 's';
+      let re;
+      try { re = new RegExp(v, flags); } catch (e) { throw new SLError(`invalid regular expression ${v}: ${e.message}`); }
+      return { fn: (x) => x != null && re.test(String(x)) };
+    }
+    for (const op of ['gt', 'gte', 'lt', 'lte']) {
+      if (mods.includes(op)) {
+        const n = Number(v);
+        if (isNaN(n)) throw new SLError(`|${op} needs a number, got "${v}"`);
+        return {
+          fn: (x) => {
+            const a = Number(x);
+            if (x == null || x === '' || isNaN(a)) return false;
+            return op === 'gt' ? a > n : op === 'gte' ? a >= n : op === 'lt' ? a < n : a <= n;
+          },
+        };
+      }
+    }
+    if (mods.includes('cidr')) {
+      const [net, bits] = v.split('/');
+      const base = ipv4ToInt(net), b = Number(bits);
+      if (base === null || isNaN(b) || b < 0 || b > 32) throw new SLError(`unsupported CIDR "${v}" (IPv4 only)`);
+      const mask = b === 0 ? 0 : (~0 << (32 - b)) >>> 0;
+      return { fn: (x) => { const ip = ipv4ToInt(x); return ip !== null && ((ip & mask) >>> 0) === ((base & mask) >>> 0); } };
+    }
+    const kind = mods.includes('contains') ? 'contains' : mods.includes('startswith') ? 'startswith' : mods.includes('endswith') ? 'endswith' : 'exact';
+    const variants = mods.includes('windash') ? windashVariants(v) : [v];
+    const ms = variants.map((s) => textMatcher(sigmaPattern(s), kind, cased));
+    return { fn: (x) => x != null && ms.some((m) => m(String(x))) };
+  }
+
+  function fieldMatcher(key, value) {
+    const [field, ...mods] = String(key).split('|');
+    for (const m of mods) {
+      if (!KNOWN_MODS.has(m)) throw new SLError(`modifier |${m} is not supported by SigmaLens`);
+    }
+    const values = Array.isArray(value) ? value : [value];
+    if (!values.length) throw new SLError(`field "${field}" has an empty value list`);
+    if (values.some((v) => v !== null && typeof v === 'object')) throw new SLError(`field "${field}" has a nested value`);
+    const matchers = values.map((v) => valueMatcher(v, mods));
+    const all = mods.includes('all');
+    return {
+      field,
+      fn: (ev, alias) => {
+        let x = ev[field];
+        if (x === undefined && alias && alias[field]) x = alias[field](ev);
+        return all ? matchers.every((m) => m.fn(x)) : matchers.some((m) => m.fn(x));
+      },
+    };
+  }
+
+  function keywordMatcher(values) {
+    const ms = values.map((v) => {
+      if (v === null || typeof v === 'object') throw new SLError('keyword lists can only contain strings');
+      return textMatcher(sigmaPattern(String(v)), 'contains', false);
+    });
+    return (ev) => {
+      const vals = Object.values(ev);
+      return ms.some((m) => vals.some((x) => x != null && m(String(x))));
+    };
+  }
+
+  function searchMatcher(name, def) {
+    if (def === null || def === undefined) throw new SLError(`search identifier "${name}" is empty`);
+    if (typeof def === 'string') return keywordMatcher([def]);
+    if (Array.isArray(def)) {
+      if (def.every((x) => x === null || typeof x !== 'object')) return keywordMatcher(def);
+      const maps = def.map((m) => {
+        if (!m || typeof m !== 'object' || Array.isArray(m)) throw new SLError(`search identifier "${name}" mixes maps and plain values`);
+        return mapMatcher(m);
+      });
+      return (ev, alias) => maps.some((f) => f(ev, alias));
+    }
+    if (typeof def === 'object') return mapMatcher(def);
+    throw new SLError(`search identifier "${name}" has an unsupported type`);
+  }
+
+  function mapMatcher(m) {
+    const fields = Object.entries(m).map(([k, v]) => fieldMatcher(k, v));
+    return (ev, alias) => fields.every((f) => f.fn(ev, alias));
+  }
+
+  function globToRe(g) {
+    return new RegExp(`^${g.split('*').map(escRe).join('.*')}$`);
+  }
+
+  function compileCondition(cond, names) {
+    if (/\|/.test(cond)) throw new SLError('aggregations in the condition ("| count() ...") are not supported');
+    const toks = cond.match(/\(|\)|[^\s()]+/g) || [];
+    let p = 0;
+    const peek = () => (toks[p] || '').toLowerCase();
+
+    function ofExpr(quant) {
+      p++; // "of"
+      const target = toks[p++];
+      if (!target) throw new SLError(`condition: "${quant} of" needs a target`);
+      let group;
+      if (target.toLowerCase() === 'them') group = names.filter((n) => !n.startsWith('_'));
+      else {
+        const re = globToRe(target);
+        group = names.filter((n) => re.test(n));
+      }
+      if (!group.length) throw new SLError(`condition: "${target}" matches no search identifier`);
+      if (quant === 'all') return (get) => group.every((n) => get(n));
+      const k = Number(quant);
+      return (get) => group.filter((n) => get(n)).length >= k;
+    }
+    function atom() {
+      const t = toks[p];
+      if (!t) throw new SLError('condition ends unexpectedly');
+      const lt = t.toLowerCase();
+      if (t === '(') {
+        p++;
+        const e = orE();
+        if (toks[p] !== ')') throw new SLError('condition: missing ")"');
+        p++;
+        return e;
+      }
+      if ((lt === 'all' || /^\d+$/.test(lt)) && (toks[p + 1] || '').toLowerCase() === 'of') { p++; return ofExpr(lt); }
+      if (['and', 'or', 'not', ')'].includes(lt)) throw new SLError(`condition: unexpected "${t}"`);
+      p++;
+      if (!names.includes(t)) throw new SLError(`condition: unknown search identifier "${t}"`);
+      return (get) => get(t);
+    }
+    function notE() {
+      if (peek() === 'not') { p++; const a = notE(); return (g) => !a(g); }
+      return atom();
+    }
+    function andE() {
+      let l = notE();
+      while (peek() === 'and') { p++; const a = l, b = notE(); l = (g) => a(g) && b(g); }
+      return l;
+    }
+    function orE() {
+      let l = andE();
+      while (peek() === 'or') { p++; const a = l, b = andE(); l = (g) => a(g) || b(g); }
+      return l;
+    }
+    const fn = orE();
+    if (p < toks.length) throw new SLError(`condition: unexpected "${toks[p]}"`);
+    return fn;
+  }
+
+  function compileRule(input, profile) {
+    const rule = typeof input === 'string' ? parseYaml(input) : input;
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) throw new SLError('a Sigma rule must be a YAML map');
+    if (rule.correlation) throw new SLError('correlation rules are not supported');
+    const det = rule.detection;
+    if (!det || typeof det !== 'object') throw new SLError('missing "detection" section');
+    if (det.condition == null) throw new SLError('missing "detection.condition"');
+    if (det.timeframe) throw new SLError('"timeframe" (aggregation) is not supported');
+    const names = Object.keys(det).filter((k) => k !== 'condition');
+    if (!names.length) throw new SLError('detection has no search identifiers');
+    const searches = {};
+    for (const n of names) {
+      try { searches[n] = searchMatcher(n, det[n]); } catch (e) { throw new SLError(`${n}: ${e.message}`); }
+    }
+    const conds = (Array.isArray(det.condition) ? det.condition : [det.condition]).map((c) => compileCondition(String(c), names));
+    const ls = logsourceFilter(rule.logsource, profile);
+    const match = (ev) => {
+      if (!ls.fn(ev)) return false;
+      const alias = ls.aliasFor(ev);
+      const memo = {};
+      const get = (n) => (n in memo ? memo[n] : (memo[n] = searches[n](ev, alias)));
+      return conds.some((c) => c(get));
+    };
+    return {
+      title: rule.title || '(untitled rule)',
+      id: rule.id || null,
+      level: rule.level || null,
+      status: rule.status || null,
+      description: rule.description || null,
+      tags: Array.isArray(rule.tags) ? rule.tags : [],
+      logsource: rule.logsource || null,
+      logsourceDesc: ls.desc,
+      notes: ls.notes,
+      match,
+    };
+  }
+
+  function runRule(compiled, recs) {
+    const hits = [];
+    for (const r of recs) if (compiled.match(r.ev)) hits.push(r);
+    return hits;
+  }
+
+  // lower-case field name -> field name as it appears in the data (first seen wins)
+  function buildFieldIndex(recs) {
+    const idx = new Map();
+    for (const r of recs) {
+      for (const k of Object.keys(r.ev)) {
+        const lk = k.toLowerCase();
+        if (!idx.has(lk)) idx.set(lk, k);
+      }
+    }
+    return idx;
+  }
+
+  return {
+    SLError, parseYaml, parseYamlDocs, loadEvents, normalizeEvent, parseTime,
+    compileQuery, compileRule, runRule, buildFieldIndex, PROFILES, CATEGORIES,
+  };
+});
+
+</script>
+
+<script>
+/* SigmaLens UI. Plain DOM, no framework. Every value from the logs is escaped before it reaches innerHTML. */
+(function () {
+  'use strict';
+  const SL = window.SigmaLens;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtN = (n) => n.toLocaleString('en-US');
+  const PAGE = 200;
+
+  const CHANNEL_SHORT = {
+    'microsoft-windows-sysmon/operational': 'Sysmon',
+    security: 'Security',
+    system: 'System',
+    application: 'Application',
+    'microsoft-windows-powershell/operational': 'PowerShell',
+    'windows powershell': 'PS classic',
+    'microsoft-windows-taskscheduler/operational': 'TaskSched',
+    'microsoft-windows-windows defender/operational': 'Defender',
+  };
+
+  const state = {
+    recs: [], sources: [], fieldIndex: new Map(), profile: 'sysmon',
+    results: [], sortDesc: false, shown: PAGE, open: new Set(),
+    extraCols: [], openField: null,
+    rules: [], editing: null, sigmaHits: [], sigmaShown: PAGE, sigmaOpen: new Set(),
+  };
+
+  // ───────── helpers ─────────
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  function fmtTime(t) {
+    if (!isFinite(t)) return '—';
+    const d = new Date(t);
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`;
+  }
+  const toLocalInput = (t) => fmtTime(t).slice(0, 19).replace(' ', 'T');
+  const fromInput = (v) => (v ? Date.parse(v.length === 16 ? `${v}:00Z` : `${v}Z`) : NaN);
+  const chanShort = (c) => CHANNEL_SHORT[String(c || '').toLowerCase()] || (c ? String(c).split('/')[0].replace('Microsoft-Windows-', '') : '—');
+
+  function details(ev) {
+    const id = Number(ev.EventID), ch = String(ev.Channel || '').toLowerCase();
+    const sysmon = ch.includes('sysmon');
+    const j = (...xs) => xs.filter((x) => x != null && x !== '' && x !== '-').join(' ');
+    if (sysmon) {
+      if (id === 1) return ev.CommandLine || ev.Image;
+      if (id === 3) return j(ev.Image, '→', `${ev.DestinationIp}:${ev.DestinationPort}`, ev.DestinationHostname ? `(${ev.DestinationHostname})` : '');
+      if (id === 22) return j(ev.Image, '→', ev.QueryName);
+      if (id === 11 || id === 23 || id === 26) return j(ev.Image, '→', ev.TargetFilename);
+      if (id >= 12 && id <= 14) return j(ev.EventType, ev.TargetObject, ev.Details ? `= ${ev.Details}` : '');
+      if (id === 5) return ev.Image;
+      if (id === 7) return j(ev.Image, 'loaded', ev.ImageLoaded);
+      if (id === 10) return j(ev.SourceImage, '→', ev.TargetImage, ev.GrantedAccess);
+    }
+    if (ev.ScriptBlockText) return ev.ScriptBlockText;
+    if (id === 4688) return ev.CommandLine || ev.NewProcessName;
+    if (id >= 4698 && id <= 4702) return j(ev.SubjectUserName, '·', ev.TaskName);
+    if (id === 4624 || id === 4625) return j(ev.TargetDomainName ? `${ev.TargetDomainName}\\${ev.TargetUserName}` : ev.TargetUserName, 'type', ev.LogonType, ev.IpAddress && ev.IpAddress !== '-' ? `from ${ev.IpAddress}` : '');
+    const skip = new Set(['@timestamp', 'EventID', 'Channel', 'Computer', 'EventRecordID', 'Provider', 'Level', 'Task', 'Keywords', 'Version', 'Opcode']);
+    return Object.entries(ev).filter(([k, v]) => !skip.has(k) && v != null && v !== '').slice(0, 4).map(([k, v]) => `${k}=${v}`).join('  ');
+  }
+
+  function busy(msg) { const b = $('busy'); if (msg) { b.textContent = msg; b.hidden = false; } else b.hidden = true; }
+  const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+  // ───────── views ─────────
+  function show(view) {
+    const hasData = state.recs.length > 0;
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === view)));
+    $('welcome').hidden = !(view === 'search' && !hasData);
+    $('view-search').hidden = !(view === 'search' && hasData);
+    $('view-sigma').hidden = view !== 'sigma';
+    $('view-rules').hidden = view !== 'rules';
+    state.view = view;
+    try { localStorage.setItem('sigmalens.view', view); } catch (e) { /* storage blocked */ }
+  }
+
+  function updateStat() {
+    const ts = state.recs.map((r) => r.t).filter(isFinite);
+    let span = '';
+    if (ts.length) {
+      let lo = Infinity, hi = -Infinity;
+      for (const t of ts) { if (t < lo) lo = t; if (t > hi) hi = t; }
+      span = ` · ${fmtTime(lo).slice(0, 16)} → ${fmtTime(hi).slice(0, 16)} UTC`;
+    }
+    $('stat').innerHTML = state.recs.length
+      ? `<b>${fmtN(state.recs.length)}</b> events from <b>${state.sources.length}</b> file${state.sources.length === 1 ? '' : 's'}${esc(span)}`
+      : 'No data loaded';
+    $('rulecount').textContent = state.rules.length;
+  }
+
+  // ───────── loading ─────────
+  async function addEventsText(text, name) {
+    busy(`Parsing ${name}…`);
+    await nextFrame();
+    const { recs, errors } = SL.loadEvents(text, name, state.recs.length);
+    for (const r of recs) state.recs.push(r);
+    state.sources.push({ name, count: recs.length });
+    state.fieldIndex = SL.buildFieldIndex(state.recs);
+    if (errors.length) console.warn(errors);
+    busy();
+    return { count: recs.length, errors };
+  }
+
+  function splitDocs(text) {
+    return text.replace(/\r\n?/g, '\n').split(/^---\s*$/m).map((s) => s.trim()).filter(Boolean);
+  }
+
+  function addRulesText(text, name) {
+    const docs = splitDocs(text);
+    docs.forEach((doc, i) => state.rules.push({ name: docs.length > 1 ? `${name} #${i + 1}` : name, text: doc + '\n', hits: null, error: null, compiled: null }));
+    compileRules();
+  }
+
+  async function handleFiles(files) {
+    let evFiles = 0, ruleFiles = 0;
+    const errs = [];
+    for (const f of files) {
+      const text = await f.text();
+      if (/\.ya?ml$/i.test(f.name)) { addRulesText(text, f.name); ruleFiles++; }
+      else {
+        const r = await addEventsText(text, f.name);
+        evFiles++;
+        if (r.errors.length) errs.push(...r.errors.slice(0, 3));
+      }
+    }
+    updateStat();
+    if (evFiles) { show('search'); runSearch(); }
+    else if (ruleFiles) { renderRules(); show(state.recs.length ? 'rules' : state.view || 'search'); }
+    if (errs.length) alertBar(errs.join('\n'));
+  }
+
+  function alertBar(msg) {
+    const e = $('qerr');
+    e.textContent = msg;
+    e.hidden = false;
+  }
+
+  // ───────── search ─────────
+  function runSearch() {
+    if (!state.recs.length) { show('search'); return; }
+    const qerr = $('qerr');
+    let pred;
+    try { pred = SL.compileQuery($('q').value, state.fieldIndex); qerr.hidden = true; }
+    catch (e) { qerr.textContent = e.message; qerr.hidden = false; return; }
+    const from = fromInput($('from').value), to = fromInput($('to').value);
+    const out = [];
+    for (const r of state.recs) {
+      if (isFinite(from) && !(r.t >= from)) continue;
+      if (isFinite(to) && !(r.t <= to)) continue;
+      if (pred(r)) out.push(r);
+    }
+    sortRecs(out, state.sortDesc);
+    state.results = out;
+    state.shown = PAGE;
+    state.open.clear();
+    renderHisto();
+    renderFields();
+    renderResults();
+    saveQuery();
+  }
+
+  function sortRecs(arr, desc) {
+    arr.sort((a, b) => {
+      const ta = isFinite(a.t) ? a.t : Infinity, tb = isFinite(b.t) ? b.t : Infinity;
+      return (ta - tb || a.i - b.i) * (desc ? -1 : 1);
+    });
+  }
+
+  function saveQuery() {
+    try { localStorage.setItem('sigmalens.q', $('q').value); } catch (e) { /* storage blocked */ }
+  }
+
+  const INTERVALS = [1, 5, 10, 30, 60, 300, 600, 1800, 3600, 10800, 21600, 43200, 86400, 604800].map((s) => s * 1000);
+
+  function renderHisto() {
+    const box = $('histo');
+    const ts = state.results.map((r) => r.t).filter(isFinite);
+    if (!ts.length) { box.innerHTML = '<div class="empty">No timestamps to chart.</div>'; return; }
+    let lo = Infinity, hi = -Infinity;
+    for (const t of ts) { if (t < lo) lo = t; if (t > hi) hi = t; }
+    const span = Math.max(hi - lo, 1000);
+    const step = INTERVALS.find((s) => span / s <= 80) || INTERVALS[INTERVALS.length - 1];
+    const start = Math.floor(lo / step) * step;
+    const n = Math.floor((hi - start) / step) + 1;
+    const counts = new Array(n).fill(0);
+    for (const t of ts) counts[Math.floor((t - start) / step)]++;
+    const max = Math.max(...counts);
+    const w = 1000 / n;
+    const bars = counts.map((c, i) => c
+      ? `<rect class="bar" x="${(i * w + w * 0.08).toFixed(2)}" width="${(w * 0.84).toFixed(2)}" y="${(64 - (c / max) * 62).toFixed(2)}" height="${((c / max) * 62).toFixed(2)}" data-i="${i}"><title>${esc(fmtTime(start + i * step).slice(0, 19))} · ${fmtN(c)} events</title></rect>`
+      : '').join('');
+    const label = step >= 86400000 ? `${step / 86400000} d` : step >= 3600000 ? `${step / 3600000} h` : step >= 60000 ? `${step / 60000} min` : `${step / 1000} s`;
+    box.innerHTML = `<svg viewBox="0 0 1000 64" preserveAspectRatio="none" role="img" aria-label="Events over time">${bars}</svg>
+      <div class="axis"><span>${esc(fmtTime(start).slice(0, 19))}</span><span>${label} per bar · click a bar to zoom</span><span>${esc(fmtTime(start + n * step).slice(0, 19))}</span></div>`;
+    box.querySelectorAll('rect.bar').forEach((el) => el.addEventListener('click', () => {
+      const i = Number(el.dataset.i);
+      $('from').value = toLocalInput(start + i * step);
+      $('to').value = toLocalInput(start + (i + 1) * step - 1);
+      runSearch();
+    }));
+  }
+
+  function renderFields() {
+    const counts = new Map();
+    const sample = state.results.length > 20000 ? state.results.slice(0, 20000) : state.results;
+    for (const r of sample) for (const k of Object.keys(r.ev)) counts.set(k, (counts.get(k) || 0) + 1);
+    const filt = $('ffilter').value.trim().toLowerCase();
+    const names = [...counts.keys()].filter((k) => !filt || k.toLowerCase().includes(filt))
+      .sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b));
+    $('fieldcount').textContent = counts.size ? `(${counts.size})` : '';
+    const pct = (c) => `${Math.round((c / Math.max(sample.length, 1)) * 100)}%`;
+    $('fields').innerHTML = names.map((k) => {
+      const isCol = state.extraCols.includes(k);
+      const open = state.openField === k;
+      return `<div class="field${isCol ? ' col' : ''}" data-f="${esc(k)}"><button type="button" aria-expanded="${open}"><span>${esc(k)}</span><span>${pct(counts.get(k))}</span></button>${open ? topValues(k) : ''}</div>`;
+    }).join('') || '<div class="muted" style="padding:10px">No fields.</div>';
+  }
+
+  function topValues(field) {
+    const m = new Map();
+    for (const r of state.results) {
+      const v = r.ev[field];
+      if (v == null || v === '') continue;
+      const s = String(v);
+      m.set(s, (m.get(s) || 0) + 1);
+    }
+    const top = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const isCol = state.extraCols.includes(field);
+    return `<div class="vals">${top.map(([v, c]) => `<div class="val" data-v="${esc(v)}"><span class="v" title="${esc(v)}">${esc(v)}</span><span class="n">${fmtN(c)}</span>
+      <button class="ib" data-act="inc" title="Filter for this value">+</button><button class="ib" data-act="exc" title="Filter out this value">−</button></div>`).join('')}
+      <div style="margin-top:6px;display:flex;gap:6px"><button class="btn sm" data-act="col">${isCol ? 'Remove column' : 'Add as column'}</button><span class="muted" style="font-size:11.5px;align-self:center">${fmtN(m.size)} distinct</span></div></div>`;
+  }
+
+  function addFilter(field, value, negate) {
+    const v = String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const term = `${negate ? 'NOT ' : ''}${field}:"${v}"`;
+    const cur = $('q').value.trim();
+    $('q').value = cur ? `${cur} AND ${term}` : term;
+    show('search');
+    runSearch();
+  }
+
+  function cols() { return ['Time', 'Source', 'ID', ...state.extraCols, 'Details']; }
+
+  function rowsHtml(recs, shown, openSet, actions) {
+    const c = cols();
+    let html = `<table class="tbl"><thead><tr>${c.map((h) => `<th${h === 'Time' ? ' class="sortable" data-sort="1" title="Sort by time"' : ''}>${esc(h)}${h === 'Time' ? (state.sortDesc ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>`;
+    for (const r of recs.slice(0, shown)) {
+      const ev = r.ev;
+      const det = String(details(ev) ?? '');
+      const open = openSet.has(r.i);
+      html += `<tr class="row${open ? ' open' : ''}" data-i="${r.i}"><td class="time">${esc(fmtTime(r.t))}</td><td><span class="chan">${esc(chanShort(ev.Channel))}</span></td><td>${esc(ev.EventID ?? '')}</td>`;
+      for (const f of state.extraCols) html += `<td class="det">${esc(ev[f] ?? '')}</td>`;
+      html += `<td class="det">${esc(det.length > 400 ? det.slice(0, 400) + '…' : det)}</td></tr>`;
+      if (open) {
+        const kv = Object.entries(ev).map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${esc(v ?? '')}</div><div class="a" data-f="${esc(k)}" data-v="${esc(v ?? '')}">${actions}</div>`).join('');
+        html += `<tr class="detail"><td colspan="${c.length}"><div class="kv">${kv}<div class="k">source</div><div class="v">${esc(r.src)}</div><div></div></div></td></tr>`;
+      }
+    }
+    html += '</tbody></table>';
+    if (recs.length > shown) html += `<div class="more"><button class="btn sm" data-more="1">Show ${fmtN(Math.min(PAGE, recs.length - shown))} more (${fmtN(recs.length - shown)} left)</button></div>`;
+    if (!recs.length) html += '<div class="muted" style="padding:14px">No events match.</div>';
+    return html;
+  }
+
+  const SEARCH_ACTIONS = '<button class="ib" data-act="inc" title="Filter for value">+</button><button class="ib" data-act="exc" title="Filter out value">−</button><button class="ib" data-act="sig" title="Copy as Sigma field">σ</button>';
+
+  function renderResults() {
+    $('rescount').textContent = `${fmtN(state.results.length)} events`;
+    $('results').innerHTML = rowsHtml(state.results, state.shown, state.open, SEARCH_ACTIONS);
+  }
+
+  function sigmaLine(field, value) {
+    const v = String(value);
+    return `${field}: '${v.replace(/'/g, "''")}'`;
+  }
+
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); flash('Copied to clipboard'); }
+    catch (e) { window.prompt('Copy:', text); }
+  }
+  function flash(msg) { busy(msg); setTimeout(() => busy(), 1200); }
+
+  function bindTable(container, getList, openSet, rerender, onPage) {
+    container.addEventListener('click', (e) => {
+      const more = e.target.closest('[data-more]');
+      if (more) { onPage(); return; }
+      if (e.target.closest('[data-sort]')) {
+        state.sortDesc = !state.sortDesc;
+        sortRecs(state.results, state.sortDesc);
+        sortRecs(state.sigmaHits, state.sortDesc);
+        renderResults(); renderSigmaHits();
+        return;
+      }
+      const act = e.target.closest('[data-act]');
+      if (act) {
+        const holder = act.closest('[data-f]');
+        const f = holder.dataset.f, v = holder.dataset.v;
+        if (act.dataset.act === 'inc') addFilter(f, v, false);
+        else if (act.dataset.act === 'exc') addFilter(f, v, true);
+        else if (act.dataset.act === 'sig') copy(sigmaLine(f, v));
+        return;
+      }
+      const row = e.target.closest('tr.row');
+      if (row && !window.getSelection().toString()) {
+        const i = Number(row.dataset.i);
+        if (openSet.has(i)) openSet.delete(i); else openSet.add(i);
+        rerender();
+      }
+    });
+  }
+
+  function exportCsv() {
+    const keys = ['@timestamp', 'Channel', 'EventID', 'Computer', ...state.extraCols];
+    const allKeys = new Set(keys);
+    const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
+    const lines = [[...allKeys, 'Details'].map(q).join(',')];
+    for (const r of state.results) lines.push([...[...allKeys].map((k) => (k === '@timestamp' ? fmtTime(r.t) : r.ev[k])), details(r.ev)].map(q).join(','));
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'sigmalens-results.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  // ───────── sigma editor ─────────
+  const TEMPLATE = `title: My detection
+status: experimental
+description: Describe what this rule should catch.
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\\powershell.exe'
+        CommandLine|contains:
+            - ' -enc '
+            - ' -EncodedCommand '
+    condition: selection
+level: medium
+`;
+
+  function updateGutter(badLine) {
+    const n = $('editor').value.split('\n').length;
+    let s = '';
+    for (let i = 1; i <= n; i++) s += (i === badLine ? `<span class="bad">${i}</span>` : i) + '\n';
+    $('gutter').innerHTML = s;
+    $('gutter').scrollTop = $('editor').scrollTop;
+  }
+
+  function runEditor() {
+    const text = $('editor').value;
+    try { localStorage.setItem('sigmalens.rule', text); } catch (e) { /* storage blocked */ }
+    const info = $('ruleinfo');
+    let c;
+    try { c = SL.compileRule(text, state.profile); }
+    catch (e) {
+      info.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+      updateGutter(e.line);
+      $('hitcount').textContent = '–'; $('hitcount').className = 'hitcount zero';
+      $('hitlabel').textContent = 'Fix the rule to run it';
+      return;
+    }
+    updateGutter();
+    info.innerHTML = `<div><b>${esc(c.title)}</b> ${c.level ? `<span class="lvl ${esc(c.level)}">${esc(c.level)}</span>` : ''}</div>
+      <div class="muted">Reads: <span class="mono">${esc(c.logsourceDesc)}</span></div>
+      ${c.notes.map((n) => `<div class="note">${esc(n)}</div>`).join('')}`;
+    if (!state.recs.length) {
+      $('hitcount').textContent = '–'; $('hitcount').className = 'hitcount zero';
+      $('hitlabel').textContent = 'Rule is valid. Load some logs to run it.';
+      return;
+    }
+    state.sigmaHits = SL.runRule(c, state.recs);
+    sortRecs(state.sigmaHits, state.sortDesc);
+    state.sigmaShown = PAGE;
+    state.sigmaOpen.clear();
+    const n = state.sigmaHits.length;
+    $('hitcount').textContent = fmtN(n);
+    $('hitcount').className = `hitcount ${n ? 'some' : 'zero'}`;
+    $('hitlabel').textContent = n === 1 ? 'match' : 'matches';
+    renderSigmaHits();
+  }
+
+  function renderSigmaHits() {
+    $('sigma-results').innerHTML = state.sigmaHits.length || state.recs.length ? rowsHtml(state.sigmaHits, state.sigmaShown, state.sigmaOpen, SEARCH_ACTIONS) : '';
+  }
+
+  // ───────── rules list ─────────
+  function compileRules() {
+    for (const r of state.rules) {
+      try { r.compiled = SL.compileRule(r.text, state.profile); r.error = null; }
+      catch (e) { r.compiled = null; r.error = e.message; }
+      r.hits = null;
+    }
+  }
+
+  function runAll() {
+    compileRules();
+    for (const r of state.rules) if (r.compiled) r.hits = SL.runRule(r.compiled, state.recs).length;
+    renderRules();
+  }
+
+  function renderRules() {
+    $('rulecount').textContent = state.rules.length;
+    if (!state.rules.length) { $('rules').innerHTML = '<div class="muted" style="padding:14px">No rules loaded. Load .yml files or save one from the Sigma editor.</div>'; return; }
+    $('rules').innerHTML = `<table class="tbl rules"><thead><tr><th>Rule</th><th>Level</th><th>Reads</th><th style="text-align:right">Hits</th><th></th></tr></thead><tbody>${state.rules.map((r, i) => `
+      <tr><td><b>${esc(r.compiled ? r.compiled.title : r.name)}</b><div class="muted" style="font-size:12px">${esc(r.name)}</div>${r.error ? `<div class="err">${esc(r.error)}</div>` : ''}</td>
+      <td>${r.compiled && r.compiled.level ? `<span class="lvl ${esc(r.compiled.level)}">${esc(r.compiled.level)}</span>` : ''}</td>
+      <td class="muted" style="font-size:12px">${r.compiled ? esc(r.compiled.logsourceDesc) : ''}</td>
+      <td class="n">${r.hits == null ? '–' : `<b style="color:${r.hits ? 'var(--hit)' : 'var(--muted)'}">${fmtN(r.hits)}</b>`}</td>
+      <td style="white-space:nowrap"><button class="btn sm" data-open="${i}">Open</button> <button class="btn sm ghost" data-del="${i}" title="Remove">✕</button></td></tr>`).join('')}</tbody></table>`;
+  }
+
+  function openRule(i) {
+    state.editing = i;
+    $('editor').value = state.rules[i].text;
+    show('sigma');
+    runEditor();
+  }
+
+  // ───────── wiring ─────────
+  function init() {
+    const prof = $('profile');
+    prof.innerHTML = Object.entries(SL.PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('');
+    try {
+      state.profile = localStorage.getItem('sigmalens.profile') || 'sysmon';
+      $('q').value = localStorage.getItem('sigmalens.q') || '';
+      $('editor').value = localStorage.getItem('sigmalens.rule') || TEMPLATE;
+      const th = localStorage.getItem('sigmalens.theme');
+      if (th) document.documentElement.dataset.theme = th;
+    } catch (e) { $('editor').value = TEMPLATE; }
+    if (!SL.PROFILES[state.profile]) state.profile = 'sysmon';
+    prof.value = state.profile;
+    updateGutter();
+
+    prof.addEventListener('change', () => {
+      state.profile = prof.value;
+      try { localStorage.setItem('sigmalens.profile', state.profile); } catch (e) { /* storage blocked */ }
+      compileRules(); renderRules();
+      if (state.view === 'sigma') runEditor();
+    });
+    document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
+      show(t.dataset.view);
+      if (t.dataset.view === 'sigma') runEditor();
+      if (t.dataset.view === 'rules') renderRules();
+    }));
+    const pick = () => $('file').click();
+    $('open').addEventListener('click', pick);
+    $('open2').addEventListener('click', pick);
+    $('loadrule').addEventListener('click', pick);
+    $('loadrules').addEventListener('click', pick);
+    $('file').addEventListener('change', (e) => { handleFiles([...e.target.files]); e.target.value = ''; });
+
+    $('run').addEventListener('click', runSearch);
+    $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+    $('from').addEventListener('change', runSearch);
+    $('to').addEventListener('change', runSearch);
+    $('clear').addEventListener('click', () => { $('q').value = ''; $('from').value = ''; $('to').value = ''; runSearch(); });
+    $('ffilter').addEventListener('input', renderFields);
+    $('export').addEventListener('click', exportCsv);
+
+    $('fields').addEventListener('click', (e) => {
+      const fieldEl = e.target.closest('.field');
+      if (!fieldEl) return;
+      const f = fieldEl.dataset.f;
+      const act = e.target.closest('[data-act]');
+      if (act) {
+        if (act.dataset.act === 'col') {
+          state.extraCols = state.extraCols.includes(f) ? state.extraCols.filter((x) => x !== f) : [...state.extraCols, f];
+          renderFields(); renderResults(); renderSigmaHits();
+        } else {
+          addFilter(f, act.closest('.val').dataset.v, act.dataset.act === 'exc');
+        }
+        return;
+      }
+      if (e.target.closest('.field > button')) { state.openField = state.openField === f ? null : f; renderFields(); }
+    });
+
+    bindTable($('results'), () => state.results, state.open, renderResults, () => { state.shown += PAGE; renderResults(); });
+    bindTable($('sigma-results'), () => state.sigmaHits, state.sigmaOpen, renderSigmaHits, () => { state.sigmaShown += PAGE; renderSigmaHits(); });
+
+    // editor
+    const ed = $('editor');
+    let t = null;
+    ed.addEventListener('input', () => {
+      updateGutter();
+      if ($('live').checked && state.recs.length < 300000) { clearTimeout(t); t = setTimeout(runEditor, 350); }
+    });
+    ed.addEventListener('scroll', () => { $('gutter').scrollTop = ed.scrollTop; });
+    ed.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runEditor(); return; }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const s = ed.selectionStart;
+        ed.setRangeText('    ', s, ed.selectionEnd, 'end');
+        updateGutter();
+      }
+    });
+    $('runrule').addEventListener('click', runEditor);
+    $('saverule').addEventListener('click', () => {
+      const text = ed.value;
+      let title = 'rule';
+      try { title = SL.parseYaml(text).title || title; } catch (e) { /* keep default */ }
+      if (state.editing != null && state.rules[state.editing]) state.rules[state.editing].text = text;
+      else { state.rules.push({ name: `${title}.yml`, text }); state.editing = state.rules.length - 1; }
+      compileRules(); renderRules(); flash('Saved to Rules');
+    });
+    $('hits2search').addEventListener('click', () => {
+      state.results = state.sigmaHits.slice();
+      state.shown = PAGE; state.open.clear();
+      $('q').value = '';
+      show('search');
+      renderHisto(); renderFields(); renderResults();
+      $('rescount').textContent = `${fmtN(state.results.length)} events (Sigma matches)`;
+    });
+
+    // rules list
+    $('runall').addEventListener('click', runAll);
+    $('rules').addEventListener('click', (e) => {
+      const o = e.target.closest('[data-open]');
+      if (o) { openRule(Number(o.dataset.open)); return; }
+      const d = e.target.closest('[data-del]');
+      if (d) {
+        const i = Number(d.dataset.del);
+        state.rules.splice(i, 1);
+        if (state.editing === i) state.editing = null; else if (state.editing > i) state.editing--;
+        renderRules();
+      }
+    });
+
+    // drag and drop
+    let depth = 0;
+    window.addEventListener('dragenter', (e) => { if ([...e.dataTransfer.types].includes('Files')) { depth++; $('drop').hidden = false; } });
+    window.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) $('drop').hidden = true; });
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => { e.preventDefault(); depth = 0; $('drop').hidden = true; if (e.dataTransfer.files.length) handleFiles([...e.dataTransfer.files]); });
+
+    // misc
+    $('help').addEventListener('click', () => $('helpdlg').showModal());
+    $('helpclose').addEventListener('click', () => $('helpdlg').close());
+    $('theme').addEventListener('click', () => {
+      const root = document.documentElement;
+      const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+      root.dataset.theme = dark ? 'light' : 'dark';
+      try { localStorage.setItem('sigmalens.theme', root.dataset.theme); } catch (e) { /* storage blocked */ }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault(); show('search'); $('q').focus();
+      }
+    });
+
+    // demo dataset (only present in builds made with --demo)
+    const demo = window.SIGMALENS_DEMO;
+    if (demo) {
+      $('demo').hidden = false;
+      $('demo').addEventListener('click', async () => {
+        await addEventsText(demo.events, 'demo-events.jsonl');
+        for (const r of demo.rules) addRulesText(r.text, r.name);
+        updateStat(); renderRules(); show('search'); runSearch();
+      });
+    }
+
+    updateStat();
+    renderRules();
+    let v = 'search';
+    try { v = localStorage.getItem('sigmalens.view') || 'search'; } catch (e) { /* storage blocked */ }
+    show(v);
+    if (v === 'sigma') runEditor();
+  }
+
+  init();
+})();
+
+</script>
+</body>
+</html>

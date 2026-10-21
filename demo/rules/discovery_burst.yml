@@ -1,0 +1,24 @@
+title: Domain Discovery Commands Spawned by PowerShell
+id: 2c7d8e9f-0a1b-4c2d-9e3f-4a5b6c7d8e9f
+status: experimental
+description: Demo rule. Interactive users rarely run domain discovery tools from PowerShell child processes.
+author: SigmaLens demo
+date: 2026-03-02
+tags:
+    - attack.discovery
+    - attack.t1087.002
+    - attack.t1482
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    parent:
+        ParentImage|endswith: '\powershell.exe'
+    tools:
+        - CommandLine|contains: 'Domain Admins'
+        - Image|endswith: '\nltest.exe'
+        - CommandLine|contains|all:
+            - 'whoami'
+            - '/all'
+    condition: parent and tools
+level: medium

@@ -1,0 +1,19 @@
+title: Run Key Pointing to a Binary in AppData
+id: 9a4f2c1b-3e5d-4f60-8b7a-1c2d3e4f5a6b
+status: experimental
+description: Demo rule. Persistence through the user's Run key to an executable in a user-writable folder.
+author: SigmaLens demo
+date: 2026-03-02
+tags:
+    - attack.persistence
+    - attack.t1547.001
+logsource:
+    category: registry_set
+    product: windows
+detection:
+    selection:
+        TargetObject|contains: '\CurrentVersion\Run\'
+        Details|contains: '\AppData\'
+        Details|endswith: '.exe'
+    condition: selection
+level: medium

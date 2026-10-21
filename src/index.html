@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SigmaLens</title>
+<meta name="description" content="Offline log explorer: search Windows event logs and test Sigma rules in the browser.">
+<link rel="stylesheet" href="style.css">
+<!--INLINE_CSS-->
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M13 7.6H8.4l2.5 2.9-2.5 2.9H13" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    SigmaLens <small>offline log explorer</small>
+  </div>
+  <span class="stat" id="stat">No data loaded</span>
+  <span class="spacer"></span>
+  <label class="stat" for="profile">Mapping</label>
+  <select class="btn" id="profile" title="Which events Sigma's process_creation category reads"></select>
+  <button class="btn" id="open">Open files</button>
+  <input type="file" id="file" multiple accept=".json,.jsonl,.ndjson,.yml,.yaml" hidden>
+  <button class="btn ghost" id="help" title="Search and Sigma syntax">?</button>
+  <button class="btn ghost" id="theme" title="Toggle light/dark">◐</button>
+</header>
+<nav class="tabs" role="tablist">
+  <button class="tab" role="tab" data-view="search" aria-selected="true">Search</button>
+  <button class="tab" role="tab" data-view="sigma" aria-selected="false">Sigma editor</button>
+  <button class="tab" role="tab" data-view="rules" aria-selected="false">Rules <span class="count" id="rulecount">0</span></button>
+</nav>
+
+<main>
+  <section class="view" id="welcome">
+    <div class="welcome">
+      <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true" style="color:var(--accent)"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <h1>Hunt through logs like in a SIEM</h1>
+      <p>Drop <b>JSON / JSONL</b> event logs and <b>Sigma</b> rules (.yml) anywhere on this page. Everything stays in your browser: nothing is uploaded.</p>
+      <div class="row">
+        <button class="btn primary" id="open2">Open files</button>
+        <button class="btn" id="demo" hidden>Load demo dataset</button>
+      </div>
+      <p style="margin-top:22px;font-size:12.5px">Convert .evtx first with <code>tools/evtx2jsonl.ps1</code>, or load <code>evtx_dump</code> / Chainsaw JSON output directly.</p>
+    </div>
+  </section>
+
+  <section class="view" id="view-search" hidden>
+    <div class="qbar">
+      <input class="q" id="q" placeholder='Search… e.g. EventID:1 AND Image:*\powershell.exe AND NOT User:*SYSTEM' spellcheck="false" autocomplete="off" aria-label="Search query">
+      <input type="datetime-local" id="from" step="1" aria-label="From (UTC)">
+      <input type="datetime-local" id="to" step="1" aria-label="To (UTC)">
+      <span class="utc">UTC</span>
+      <button class="btn primary" id="run">Search</button>
+      <button class="btn ghost" id="clear" title="Clear search and time range">Reset</button>
+    </div>
+    <div class="err" id="qerr" hidden></div>
+    <div class="histo" id="histo"></div>
+    <div class="split">
+      <aside class="panel fields">
+        <div class="panel-h">Fields <span class="muted" id="fieldcount"></span></div>
+        <div style="padding:8px 8px 6px"><input id="ffilter" placeholder="Filter fields" aria-label="Filter fields"></div>
+        <div class="panel-b" id="fields"></div>
+      </aside>
+      <div class="panel">
+        <div class="panel-h"><span id="rescount">0 events</span>
+          <div class="tools"><button class="btn sm" id="export">Export CSV</button></div>
+        </div>
+        <div class="panel-b" id="results"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-sigma" hidden>
+    <div class="sigma">
+      <div class="panel">
+        <div class="panel-h">Rule
+          <div class="tools">
+            <label class="muted" style="font-weight:400;font-size:12.5px"><input type="checkbox" id="live" checked> live</label>
+            <button class="btn sm" id="loadrule">Load .yml</button>
+            <button class="btn sm" id="saverule">Save to Rules</button>
+            <button class="btn sm primary" id="runrule" title="Ctrl+Enter">Run ▶</button>
+          </div>
+        </div>
+        <div class="ed-wrap"><div class="gutter" id="gutter">1</div><textarea class="ed" id="editor" spellcheck="false" autocomplete="off" aria-label="Sigma rule editor"></textarea></div>
+        <div class="ruleinfo" id="ruleinfo"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="hitcount zero" id="hitcount">–</span><span class="muted" id="hitlabel">Run a rule to see its matches</span>
+          <div class="tools"><button class="btn sm" id="hits2search" title="Open these events in Search">Show in Search</button></div>
+        </div>
+        <div class="panel-b" id="sigma-results"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-rules" hidden>
+    <div class="qbar">
+      <button class="btn" id="loadrules">Load rules</button>
+      <button class="btn primary" id="runall">Run all</button>
+      <span class="muted" style="font-size:12.5px">Rules run against every loaded event with the current mapping.</span>
+    </div>
+    <div class="panel" style="flex:1">
+      <div class="panel-b" id="rules"></div>
+    </div>
+  </section>
+</main>
+
+<div class="drop" id="drop" hidden><div>Drop logs (.json, .jsonl) or Sigma rules (.yml)</div></div>
+<div class="busy" id="busy" hidden></div>
+
+<dialog id="helpdlg">
+  <h2>Syntax</h2>
+  <h3>Search</h3>
+  <table>
+    <tr><td>EventID:1</td><td>field equals value (case-insensitive)</td></tr>
+    <tr><td>Image:*\cmd.exe</td><td><code>*</code> is a wildcard (contains: <code>*text*</code>)</td></tr>
+    <tr><td>CommandLine:"*-w hidden*"</td><td>quotes keep spaces in one value</td></tr>
+    <tr><td>whoami</td><td>free text: any field contains it</td></tr>
+    <tr><td>A AND B · A OR B · NOT A</td><td>also <code>&amp;&amp;</code> <code>||</code> <code>!</code> or a leading <code>-</code>; terms side by side mean AND</td></tr>
+    <tr><td>DestinationPort:&gt;=1024</td><td>numeric comparison</td></tr>
+    <tr><td>_exists_:QueryName · Field:*</td><td>field present and not empty</td></tr>
+  </table>
+  <h3>Sigma</h3>
+  <p class="muted" style="margin:4px 0">Supports maps and lists of maps, keyword lists, <code>condition</code> with and/or/not, parentheses, <code>1 of x*</code>, <code>all of them</code>; modifiers <code>contains startswith endswith all re i m s cased exists gt gte lt lte cidr windash</code>. Values use Sigma escaping: <code>*</code> and <code>?</code> are wildcards, <code>\*</code> is a literal asterisk. Not supported: aggregations, correlations, base64 modifiers.</p>
+  <p class="muted" style="margin:4px 0"><b>Mapping</b> decides which events <code>process_creation</code> reads: Sysmon EID 1, Security 4688 (with Image/ParentImage/User mapped from 4688 fields) or both. Other categories follow Sysmon event IDs; <code>ps_script</code> is PowerShell 4104.</p>
+  <div style="text-align:right;margin-top:14px"><button class="btn" id="helpclose">Close</button></div>
+</dialog>
+
+<script src="engine.js"></script>
+<!--INLINE_DEMO-->
+<script src="app.js"></script>
+</body>
+</html>

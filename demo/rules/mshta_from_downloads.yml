@@ -1,0 +1,20 @@
+title: MSHTA Running an HTA From the Downloads Folder
+id: 5b3a3f8e-0c2d-4a51-9b7e-2f6a1d0c9e41
+status: experimental
+description: Demo rule. HTML Applications launched from Downloads are a classic phishing payload.
+author: SigmaLens demo
+date: 2026-03-02
+tags:
+    - attack.defense_evasion
+    - attack.t1218.005
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        - Image|endswith: '\mshta.exe'
+        - OriginalFileName: 'MSHTA.EXE'
+    downloads:
+        CommandLine|contains: '\Downloads\'
+    condition: selection and downloads
+level: high
