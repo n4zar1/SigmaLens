@@ -150,7 +150,40 @@ dialog table { border-collapse: collapse; width: 100%; font-size: 13px; }
 dialog td { padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
 dialog td:first-child { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
 
+/* guide */
+.guide { flex-direction: row; gap: 28px; overflow: auto; padding-top: 18px; }
+.toc { position: sticky; top: 0; align-self: flex-start; display: flex; flex-direction: column; gap: 2px; min-width: 190px; padding: 4px 0; }
+.toc a { color: var(--muted); text-decoration: none; padding: 4px 10px; border-left: 2px solid var(--line); font-size: 13px; }
+.toc a:hover { color: var(--fg); border-left-color: var(--accent); }
+.doc { max-width: 800px; padding-bottom: 60px; line-height: 1.6; }
+.doc h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.02em; }
+.doc h2 { font-size: 19px; margin: 34px 0 8px; padding-top: 6px; border-top: 1px solid var(--line); scroll-margin-top: 10px; }
+.doc h3 { font-size: 15px; margin: 20px 0 6px; }
+.doc .lead { font-size: 15.5px; color: var(--fg); }
+.doc a { color: var(--accent); }
+.doc code { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.doc pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow: auto; font: 12.5px/1.55 var(--mono); }
+.doc kbd { border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel2); }
+.doc ul, .doc ol { padding-left: 22px; }
+.doc li { margin: 4px 0; }
+.doc .defs { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+.doc .defs dt { font-weight: 700; }
+.doc .defs dd { margin: 0; }
+.doc table.ref { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 6px 0 10px; }
+.doc table.ref th { text-align: left; background: var(--panel2); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.doc table.ref td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.doc table.ref td:first-child { white-space: nowrap; }
+.callout { background: var(--sel); border: 1px solid var(--line2); border-radius: 8px; padding: 10px 12px; margin: 14px 0; font-size: 13.5px; }
+.tip { border-left: 3px solid var(--hit); padding: 4px 0 4px 12px; }
+.try, .try-badge { border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 6px; padding: 1px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.try { cursor: pointer; }
+.try:hover { background: var(--accent); color: var(--accent-ink); }
+
 @media (max-width: 900px) {
+  .guide { flex-direction: column; }
+  .toc { position: static; flex-direction: row; flex-wrap: wrap; }
+  .doc table.ref td:first-child { white-space: normal; }
+  .doc .defs { grid-template-columns: 1fr; }
   .split, .sigma { grid-template-columns: 1fr; }
   .split .fields { max-height: 220px; }
   .sigma .panel:first-child { min-height: 360px; }

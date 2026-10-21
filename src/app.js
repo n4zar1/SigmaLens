@@ -69,6 +69,7 @@
     $('view-search').hidden = !(view === 'search' && hasData);
     $('view-sigma').hidden = view !== 'sigma';
     $('view-rules').hidden = view !== 'rules';
+    $('view-guide').hidden = view !== 'guide';
     state.view = view;
     try { localStorage.setItem('sigmalens.view', view); } catch (e) { /* storage blocked */ }
   }
@@ -538,6 +539,7 @@ level: medium
     // misc
     $('help').addEventListener('click', () => $('helpdlg').showModal());
     $('helpclose').addEventListener('click', () => $('helpdlg').close());
+    $('helpguide').addEventListener('click', () => { $('helpdlg').close(); show('guide'); });
     $('theme').addEventListener('click', () => {
       const root = document.documentElement;
       const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
@@ -552,14 +554,53 @@ level: medium
 
     // demo dataset (only present in builds made with --demo)
     const demo = window.SIGMALENS_DEMO;
+    let demoLoaded = false;
+    async function loadDemo() {
+      if (!demo) { pick(); return; }
+      if (demoLoaded) { flash('Demo dataset already loaded'); return; }
+      demoLoaded = true;
+      await addEventsText(demo.events, 'demo-events.jsonl');
+      for (const r of demo.rules) addRulesText(r.text, r.name);
+      updateStat(); renderRules();
+    }
     if (demo) {
       $('demo').hidden = false;
-      $('demo').addEventListener('click', async () => {
-        await addEventsText(demo.events, 'demo-events.jsonl');
-        for (const r of demo.rules) addRulesText(r.text, r.name);
-        updateStat(); renderRules(); show('search'); runSearch();
-      });
+      $('demo').addEventListener('click', async () => { await loadDemo(); show('search'); runSearch(); });
     }
+
+    // guide: mapping table from the engine, "Try it" buttons, links between views
+    $('maptable').innerHTML = `<table class="ref"><thead><tr><th>category</th><th>reads</th></tr></thead><tbody>${
+      Object.entries(SL.CATEGORIES).map(([cat, pairs]) => `<tr><td><code>${esc(cat)}</code></td><td>${
+        cat === 'process_creation' ? 'depends on <b>Mapping</b> (below)' : pairs.map(([ch, ids]) => `${esc(chanShort(ch))} ${esc(ids.join(', '))}`).join(' · ')
+      }</td></tr>`).join('')}</tbody></table>`;
+    $('servicelist').innerHTML = Object.entries(SL.CHANNELS).map(([s, ch]) => `<code>${esc(s)}</code> → ${esc(ch)}`).join(', ');
+    if (!demo) $('g-demo-hint').innerHTML = 'Examples marked <span class="try-badge">Try it</span> run against the loaded data. They were written for the demo dataset (<code>dist/sigmalens-demo.html</code>), so with your own logs some may return nothing.';
+    document.addEventListener('click', async (e) => {
+      const go = e.target.closest('[data-goto]');
+      if (go) {
+        e.preventDefault();
+        if (go.dataset.goto === 'demo') { await loadDemo(); flash('Demo dataset loaded'); }
+        else show(go.dataset.goto);
+        return;
+      }
+      const tq = e.target.closest('[data-try-q]');
+      if (tq) {
+        if (!state.recs.length) await loadDemo();
+        if (!state.recs.length) return;
+        $('q').value = tq.dataset.tryQ;
+        $('from').value = ''; $('to').value = '';
+        show('search'); runSearch();
+        return;
+      }
+      const tr = e.target.closest('[data-try-rule]');
+      if (tr) {
+        const pre = tr.closest('p').previousElementSibling;
+        $('editor').value = pre.textContent.replace(/[ \t]+#.*$/gm, '') + '\n';
+        state.editing = null;
+        if (!state.recs.length && demo) await loadDemo();
+        show('sigma'); updateGutter(); runEditor();
+      }
+    });
 
     updateStat();
     renderRules();

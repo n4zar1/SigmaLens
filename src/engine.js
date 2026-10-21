@@ -761,6 +761,6 @@
 
   return {
     SLError, parseYaml, parseYamlDocs, loadEvents, normalizeEvent, parseTime,
-    compileQuery, compileRule, runRule, buildFieldIndex, PROFILES, CATEGORIES,
+    compileQuery, compileRule, runRule, buildFieldIndex, PROFILES, CATEGORIES, CHANNELS: CH,
   };
 });

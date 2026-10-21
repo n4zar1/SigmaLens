@@ -13,6 +13,7 @@ SigmaLens gives you the hunting workflow of a SIEM in a browser tab: a search ba
 - **Logsource mapping** for Windows: Sysmon event IDs per category, PowerShell 4104 for `ps_script`, services such as `security`. `process_creation` can read Sysmon 1, Security 4688 (with `Image`, `ParentImage` and `User` mapped from 4688 fields) or both.
 - **Rules view**: load a folder of rules and run them all to see which ones fire.
 - **Export** search results to CSV.
+- **Built-in guide** (Guide tab) with runnable examples.
 - Works from `file://` with no network access, in light and dark mode.
 
 ![Sigma editor](docs/sigma.png)

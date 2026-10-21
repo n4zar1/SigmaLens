@@ -27,6 +27,7 @@
   <button class="tab" role="tab" data-view="search" aria-selected="true">Search</button>
   <button class="tab" role="tab" data-view="sigma" aria-selected="false">Sigma editor</button>
   <button class="tab" role="tab" data-view="rules" aria-selected="false">Rules <span class="count" id="rulecount">0</span></button>
+  <button class="tab" role="tab" data-view="guide" aria-selected="false">Guide</button>
 </nav>
 
 <main>
@@ -40,6 +41,7 @@
         <button class="btn" id="demo" hidden>Load demo dataset</button>
       </div>
       <p style="margin-top:22px;font-size:12.5px">Convert .evtx first with <code>tools/evtx2jsonl.ps1</code>, or load <code>evtx_dump</code> / Chainsaw JSON output directly.</p>
+      <p style="font-size:12.5px">New here? Read the <a href="#" data-goto="guide">Guide</a>.</p>
     </div>
   </section>
 
@@ -102,6 +104,191 @@
       <div class="panel-b" id="rules"></div>
     </div>
   </section>
+
+  <section class="view guide" id="view-guide" hidden>
+    <nav class="toc" aria-label="Guide contents">
+      <a href="#g-start">Getting started</a>
+      <a href="#g-data">Loading data</a>
+      <a href="#g-tour">The interface</a>
+      <a href="#g-search">Search syntax</a>
+      <a href="#g-explore">Timeline &amp; fields</a>
+      <a href="#g-sigma">Sigma editor</a>
+      <a href="#g-mods">Modifiers &amp; values</a>
+      <a href="#g-cond">Conditions</a>
+      <a href="#g-map">Logsource mapping</a>
+      <a href="#g-rules">Rules view</a>
+      <a href="#g-workflow">Workflow: hunt → rule</a>
+      <a href="#g-keys">Shortcuts</a>
+      <a href="#g-limits">Limits &amp; privacy</a>
+    </nav>
+    <article class="doc">
+      <h1>SigmaLens guide</h1>
+      <p class="lead">SigmaLens is a small SIEM that runs inside this page. You load event logs, hunt through them with a search bar, and write <b>Sigma</b> rules that are tested against the data while you type. It never connects to the internet, and your files never leave your computer.</p>
+      <div class="callout" id="g-demo-hint">Examples marked <span class="try-badge">Try it</span> run against the loaded data. They were written for the demo dataset: <button class="btn sm" data-goto="demo">Load demo dataset</button></div>
+
+      <h2 id="g-start">Getting started</h2>
+      <ol>
+        <li>Click <b>Open files</b> (or drag files onto the page) and pick your logs: <code>.json</code> / <code>.jsonl</code>.</li>
+        <li>Go to <b>Search</b> and type a query, or just scroll through the timeline.</li>
+        <li>Found something interesting? Turn it into a rule in the <b>Sigma editor</b> and check that it matches what you expect, and nothing else.</li>
+      </ol>
+      <p>You can load more files at any time. Events are added to what is already loaded, and Sigma rules (<code>.yml</code>) go to the <b>Rules</b> tab.</p>
+
+      <h2 id="g-data">Loading data</h2>
+      <p>SigmaLens reads <b>JSON objects</b>, one event each:</p>
+      <ul>
+        <li><b>JSONL</b> (one object per line): the recommended format.</li>
+        <li>A <b>JSON array</b> of objects.</li>
+        <li><b>evtx_dump / python-evtx</b> output (<code>{"Event":{"System":…,"EventData":…}}</code>), which is flattened automatically: <code>EventID</code>, <code>Channel</code>, <code>Computer</code>, <code>EventRecordID</code>, <code>Provider</code> and <code>@timestamp</code> come from <i>System</i>, and every <i>EventData</i> value becomes its own field.</li>
+      </ul>
+      <p>Other nested objects become dotted names, for example <code>process.parent.name</code>. The event time is taken from the first field present among <code>@timestamp</code>, <code>TimeCreated</code>, <code>SystemTime</code>, <code>UtcTime</code>, <code>timestamp</code> and <code>time</code>. A time without a zone is read as <b>UTC</b>, and all times on screen are UTC.</p>
+      <h3>Converting .evtx files</h3>
+      <p>Browsers can't read the binary .evtx format, so convert them first. On Windows, the bundled script uses only built-in cmdlets:</p>
+      <pre>.\tools\evtx2jsonl.ps1 -Path .\Logs\*.evtx -OutDir .\jsonl</pre>
+      <p>It writes one <code>.jsonl</code> per log, with the same field names you see in Event Viewer's XML view (for Sysmon: <code>Image</code>, <code>CommandLine</code>, <code>ParentImage</code>…).</p>
+
+      <h2 id="g-tour">The interface</h2>
+      <dl class="defs">
+        <dt>Top bar</dt><dd>How many events are loaded and their time span, the <b>Mapping</b> selector (see <a href="#g-map">Logsource mapping</a>), <b>Open files</b>, a quick syntax card <kbd>?</kbd> and light/dark mode <kbd>◐</kbd>.</dd>
+        <dt>Search</dt><dd>Query bar and UTC time range, a timeline of the matching events, the fields panel and the results table.</dd>
+        <dt>Sigma editor</dt><dd>Write or paste a rule on the left and see its matches on the right. With <b>live</b> on, the rule runs as you type.</dd>
+        <dt>Rules</dt><dd>Every rule you loaded or saved, with its hit count after <b>Run all</b>.</dd>
+      </dl>
+      <h3>Reading the results table</h3>
+      <p>Each row shows the time, the log it came from (<span class="chan">Sysmon</span>, <span class="chan">Security</span>, <span class="chan">PowerShell</span>…), the event ID and a <b>Details</b> summary chosen per event type: the command line for a process, <code>Image → IP:port</code> for a connection, the query for DNS, the key and value for the registry, the script for PowerShell 4104.</p>
+      <p>Click a row to see <b>every field</b>. Next to each value you'll find three buttons:</p>
+      <ul>
+        <li><kbd>+</kbd> keeps only events with this value: it adds <code>Field:"value"</code> to the search.</li>
+        <li><kbd>−</kbd> hides events with this value: it adds <code>NOT Field:"value"</code>.</li>
+        <li><kbd>σ</kbd> copies the field as a Sigma line (<code>Field: 'value'</code>), ready to paste into a rule.</li>
+      </ul>
+      <p>Click the <b>Time</b> header to flip the sort order. <b>Export CSV</b> saves the current results.</p>
+
+      <h2 id="g-search">Search syntax</h2>
+      <p>The search language is close to Kibana and Lucene. Searches are <b>case-insensitive</b>, both for field names and for values.</p>
+      <table class="ref">
+        <thead><tr><th>Query</th><th>Meaning</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><code>EventID:1</code></td><td>Field <b>equals</b> the value (the whole value, not part of it).</td><td><button class="try" data-try-q="EventID:1">Try it</button></td></tr>
+          <tr><td><code>Image:*\powershell.exe</code></td><td><code>*</code> is a wildcard. <code>*text*</code> means "contains", <code>text*</code> "starts with", <code>*text</code> "ends with".</td><td><button class="try" data-try-q="Image:*\powershell.exe">Try it</button></td></tr>
+          <tr><td><code>CommandLine:"*-w hidden*"</code></td><td>Quotes keep spaces inside one value. Wildcards still work inside quotes.</td><td><button class="try" data-try-q='CommandLine:"*-w hidden*"'>Try it</button></td></tr>
+          <tr><td><code>whoami</code></td><td>Free text: any field <b>contains</b> the word.</td><td><button class="try" data-try-q="whoami">Try it</button></td></tr>
+          <tr><td><code>EventID:22 AND NOT QueryName:*.corp.example</code></td><td><code>AND</code>, <code>OR</code>, <code>NOT</code> in capitals, or <code>&amp;&amp;</code> <code>||</code> <code>!</code>. A leading <code>-</code> also negates. Two terms side by side mean AND.</td><td><button class="try" data-try-q="EventID:22 AND NOT QueryName:*.corp.example">Try it</button></td></tr>
+          <tr><td><code>(EventID:3 OR EventID:22) Image:*updsvc*</code></td><td>Parentheses group conditions.</td><td><button class="try" data-try-q="(EventID:3 OR EventID:22) Image:*updsvc*">Try it</button></td></tr>
+          <tr><td><code>DestinationPort:&gt;=1024</code></td><td>Numeric comparison: <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code>.</td><td><button class="try" data-try-q="EventID:3 AND DestinationPort:>=1024">Try it</button></td></tr>
+          <tr><td><code>_exists_:ScriptBlockText</code></td><td>The field is present and not empty. <code>Field:*</code> does the same.</td><td><button class="try" data-try-q="_exists_:ScriptBlockText">Try it</button></td></tr>
+        </tbody>
+      </table>
+      <p class="tip"><b>Equals vs contains.</b> <code>CommandLine:whoami</code> only matches a command line that is exactly <code>whoami</code>. To find it anywhere in the command line use <code>CommandLine:*whoami*</code>, or plain <code>whoami</code> to look in every field.</p>
+      <p class="tip"><b>Backslashes</b> are ordinary characters in the search bar: type Windows paths as they are, <code>C:\Windows\System32\*</code>.</p>
+
+      <h2 id="g-explore">Timeline &amp; fields</h2>
+      <p>The <b>timeline</b> shows how the matching events spread over time. Bar width adapts to the span (1 second up to 1 week). Hover a bar to see its count, and <b>click it to zoom</b>: the From/To boxes take that bar's range. <b>Reset</b> clears the query and the time range.</p>
+      <p>The <b>fields panel</b> lists every field in the current results and the share of events that have it. Click a field to see its <b>10 most common values</b> and the number of distinct values, then use <kbd>+</kbd> / <kbd>−</kbd> to filter or <b>Add as column</b> to show it in the table. Spotting rare values is often the fastest way to find the attacker: try <code>EventID:1</code> and look at the values of <code>ParentImage</code>.</p>
+
+      <h2 id="g-sigma">Sigma editor</h2>
+      <p><a href="https://github.com/SigmaHQ/sigma-specification" target="_blank" rel="noopener">Sigma</a> is an open, vendor-neutral format for detection rules. A rule says <b>which logs</b> to read (<code>logsource</code>), <b>what to look for</b> (named <i>search identifiers</i> under <code>detection</code>) and <b>how to combine them</b> (<code>condition</code>):</p>
+<pre>title: Discovery from PowerShell
+logsource:
+    category: process_creation    # which events (see Logsource mapping)
+    product: windows
+detection:
+    parent:                       # a search identifier: all fields must match (AND)
+        ParentImage|endswith: '\powershell.exe'
+    tools:                        # a list of maps: any of them may match (OR)
+        - Image|endswith: '\nltest.exe'
+        - CommandLine|contains: 'Domain Admins'
+    condition: parent and tools
+level: medium</pre>
+      <p><button class="btn sm" data-try-rule="1">Open this rule in the editor</button></p>
+      <ul>
+        <li><b>Run</b> (or <kbd>Ctrl</kbd>+<kbd>Enter</kbd>) tests the rule against <b>all</b> loaded events. The time range on the Search tab doesn't apply here.</li>
+        <li>With <b>live</b> checked, the rule runs again shortly after you stop typing.</li>
+        <li>Under the editor you see the rule's title and level, and <b>Reads:</b> the exact events its logsource selects. If something is wrong (bad indentation, an unknown identifier in the condition, an unsupported modifier) the error is shown there and its line number turns red.</li>
+        <li><b>Save to Rules</b> stores the rule in the Rules tab. If you opened it from there, it updates it in place.</li>
+        <li><b>Show in Search</b> sends the matches to the Search tab, where you can use the timeline and fields panel on them.</li>
+      </ul>
+      <p>The editor remembers your last rule in this browser.</p>
+
+      <h2 id="g-mods">Modifiers &amp; values</h2>
+      <p>Write a field as <code>Field|modifier</code>. A <b>list</b> of values means <i>any of them</i>. Matching is <b>case-insensitive</b> unless you add <code>|cased</code>.</p>
+      <table class="ref">
+        <thead><tr><th>Modifier</th><th>Matches when the field…</th></tr></thead>
+        <tbody>
+          <tr><td><i>(none)</i></td><td>equals the value (wildcards allowed)</td></tr>
+          <tr><td><code>contains</code></td><td>contains the value</td></tr>
+          <tr><td><code>startswith</code> / <code>endswith</code></td><td>starts / ends with the value</td></tr>
+          <tr><td><code>all</code></td><td>matches <b>every</b> value in the list instead of any (e.g. <code>CommandLine|contains|all</code>)</td></tr>
+          <tr><td><code>re</code></td><td>matches a JavaScript regular expression; add <code>i</code>, <code>m</code>, <code>s</code> for flags (<code>|re|i</code>)</td></tr>
+          <tr><td><code>windash</code></td><td>also tries <code>/</code> and the long dashes wherever the value has a <code>-</code> flag (<code>-enc</code>, <code>/enc</code>, <code>–enc</code>…)</td></tr>
+          <tr><td><code>cased</code></td><td>matches with exact capitalization</td></tr>
+          <tr><td><code>exists</code></td><td>is present (<code>true</code>) or absent (<code>false</code>)</td></tr>
+          <tr><td><code>gt</code> <code>gte</code> <code>lt</code> <code>lte</code></td><td>is a number above / below the value</td></tr>
+          <tr><td><code>cidr</code></td><td>is an IPv4 address inside the range (<code>10.0.0.0/8</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Wildcards and escaping</h3>
+      <p>In Sigma values, <code>*</code> matches any text and <code>?</code> one character. A backslash only escapes those characters and itself: <code>\*</code> is a literal asterisk and <code>\\</code> one literal backslash. Any other backslash is literal, so paths are written as usual: <code>'C:\Users\Public\'</code>.</p>
+      <p class="tip"><b>Common trap:</b> <code>'C:\Users\*'</code> does <b>not</b> mean "anything under C:\Users": <code>\*</code> is an escaped asterisk. Write <code>Image|startswith: 'C:\Users\'</code> or <code>'C:\Users\\*'</code>.</p>
+      <h3>Empty and missing fields</h3>
+      <p><code>Field: null</code> matches when the field is missing or empty. A condition like <code>not filter</code> on a field that some events don't have will let those events through. That's a frequent source of false negatives worth testing.</p>
+
+      <h2 id="g-cond">Conditions</h2>
+      <table class="ref">
+        <tbody>
+          <tr><td><code>selection</code></td><td>one search identifier</td></tr>
+          <tr><td><code>selection and not filter</code></td><td><code>and</code>, <code>or</code>, <code>not</code>, with parentheses for grouping</td></tr>
+          <tr><td><code>1 of selection_*</code></td><td>at least one identifier whose name matches the pattern</td></tr>
+          <tr><td><code>all of selection_*</code></td><td>every identifier matching the pattern</td></tr>
+          <tr><td><code>1 of them</code> / <code>all of them</code></td><td>any / every identifier (names starting with <code>_</code> are left out)</td></tr>
+        </tbody>
+      </table>
+      <p>A search identifier can also be a plain <b>list of strings</b> (keywords). It matches when any field of the event contains any of them.</p>
+
+      <h2 id="g-map">Logsource mapping</h2>
+      <p>The <code>logsource</code> decides which events a rule reads. <code>product: windows</code> plus a <code>category</code> selects events by log channel and event ID:</p>
+      <div id="maptable"></div>
+      <p><code>service</code> selects a whole log: <span id="servicelist"></span>.</p>
+      <p>The <b>Mapping</b> selector in the top bar changes what <code>process_creation</code> reads:</p>
+      <ul>
+        <li><b>Sysmon</b> (default): Sysmon event 1.</li>
+        <li><b>Security</b>: Security event 4688. <code>Image</code>, <code>ParentImage</code>, <code>ProcessId</code> and <code>User</code> are filled from <code>NewProcessName</code>, <code>ParentProcessName</code>, <code>NewProcessId</code> and <code>SubjectDomainName\SubjectUserName</code>. Fields that only Sysmon has (<code>OriginalFileName</code>, <code>Hashes</code>…) stay empty.</li>
+        <li><b>Both</b>: either source. One process may then match twice.</li>
+      </ul>
+
+      <h2 id="g-rules">Rules view</h2>
+      <p>Load one or many <code>.yml</code> files (a file may hold several rules separated by <code>---</code>) and press <b>Run all</b>. Each rule shows its level, the events it reads and its <b>hit count</b>. Rules that fail to parse show the error instead. <b>Open</b> takes a rule to the editor, and <b>✕</b> removes it from the list (not from disk). Changing the Mapping re-checks every rule.</p>
+
+      <h2 id="g-workflow">Workflow: from a hunt to a rule</h2>
+      <p>A typical loop, using the demo dataset:</p>
+      <ol>
+        <li><b>Find something odd.</b> Search for processes started by PowerShell: <button class="try" data-try-q="EventID:1 AND ParentImage:*powershell.exe">Try it</button></li>
+        <li><b>Understand it.</b> Open the rows and read the command lines. Use the timeline to see what happened just before and after.</li>
+        <li><b>Describe it as a rule.</b> Copy the key fields with <kbd>σ</kbd>, paste them into the Sigma editor and generalize: <code>endswith</code> instead of a full path, a list instead of a single value.</li>
+        <li><b>Check true positives.</b> The rule must match the malicious events you found.</li>
+        <li><b>Check false positives.</b> Look at everything else it matches. Too much? Add a precise <code>filter</code>.</li>
+        <li><b>Check false negatives.</b> Ask how an attacker could do the same thing and not match: a renamed binary, another file type, a different tool, a split command line. Test those variants too.</li>
+      </ol>
+
+      <h2 id="g-keys">Shortcuts</h2>
+      <table class="ref">
+        <tbody>
+          <tr><td><kbd>/</kbd></td><td>jump to the search bar</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>run the search</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>run the rule in the editor</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>indent 4 spaces in the editor</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="g-limits">Limits &amp; privacy</h2>
+      <ul>
+        <li>Not supported: aggregations (<code>| count() by …</code>, <code>timeframe</code>), correlation rules, and the <code>base64</code>, <code>base64offset</code>, <code>utf16le</code> and <code>wide</code> modifiers. They're reported as errors, never silently ignored.</li>
+        <li>Everything is kept in memory. A few hundred thousand events work well on a normal laptop. Very large datasets are slower to search, and the live editor turns itself off above 300,000 events (use <b>Run</b>).</li>
+        <li>Nothing is uploaded and no network requests are made. Only your preferences (last query, last rule, mapping, theme, tab) are stored in this browser's local storage.</li>
+      </ul>
+      <p class="muted" style="margin-top:28px">SigmaLens · MIT License · Carlos Fernández (N4zar1). Sigma is an open standard maintained by SigmaHQ; SigmaLens is an independent project.</p>
+    </article>
+  </section>
 </main>
 
 <div class="drop" id="drop" hidden><div>Drop logs (.json, .jsonl) or Sigma rules (.yml)</div></div>
@@ -122,7 +309,7 @@
   <h3>Sigma</h3>
   <p class="muted" style="margin:4px 0">Supports maps and lists of maps, keyword lists, <code>condition</code> with and/or/not, parentheses, <code>1 of x*</code>, <code>all of them</code>; modifiers <code>contains startswith endswith all re i m s cased exists gt gte lt lte cidr windash</code>. Values use Sigma escaping: <code>*</code> and <code>?</code> are wildcards, <code>\*</code> is a literal asterisk. Not supported: aggregations, correlations, base64 modifiers.</p>
   <p class="muted" style="margin:4px 0"><b>Mapping</b> decides which events <code>process_creation</code> reads: Sysmon EID 1, Security 4688 (with Image/ParentImage/User mapped from 4688 fields) or both. Other categories follow Sysmon event IDs; <code>ps_script</code> is PowerShell 4104.</p>
-  <div style="text-align:right;margin-top:14px"><button class="btn" id="helpclose">Close</button></div>
+  <div style="display:flex;justify-content:space-between;margin-top:14px"><button class="btn" id="helpguide">Open the full Guide</button><button class="btn" id="helpclose">Close</button></div>
 </dialog>
 
 <script src="engine.js"></script>
