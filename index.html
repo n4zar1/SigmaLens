@@ -327,7 +327,7 @@ dialog td:first-child { font-family: var(--mono); font-size: 12.5px; white-space
         <li>Go to <b>Search</b> and type a query, or just scroll through the timeline.</li>
         <li>Found something interesting? Turn it into a rule in the <b>Sigma editor</b> and check that it matches what you expect, and nothing else.</li>
       </ol>
-      <p>You can load more files at any time. Events are added to what is already loaded, and Sigma rules (<code>.yml</code>) go to the <b>Rules</b> tab.</p>
+      <p>You can load more files at any time. Events are added to what is already loaded, and Sigma rules (<code>.yml</code>) go to the <b>Rules</b> tab. If you load a file that is already loaded (or a copy of it with another name), SigmaLens skips it and tells you, so no event is counted twice.</p>
 
       <h2 id="g-data">Loading data</h2>
       <p>SigmaLens reads <b>JSON objects</b>, one event each:</p>
@@ -1849,13 +1849,22 @@ window.SIGMALENS_DEMO = {"events": "{\"@timestamp\": \"2026-03-02T07:34:12.000Z\
   }
 
   // ───────── loading ─────────
+  // Fingerprint of a file's content (length + FNV-1a), to spot the same file loaded twice
+  // (dropped again, or a copy with another name), which would count every event twice.
+  function fingerprint(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return `${text.length}:${(h >>> 0).toString(16)}`;
+  }
+  const alreadyLoaded = (text) => { const fp = fingerprint(text); return state.sources.find((s) => s.fp === fp); };
+
   async function addEventsText(text, name) {
     busy(`Parsing ${name}…`);
     await nextFrame();
     const load = /\.eml$/i.test(name) ? SL.loadEml : SL.loadEvents;
     const { recs, errors } = load(text, name, state.recs.length);
     for (const r of recs) state.recs.push(r);
-    state.sources.push({ name, count: recs.length });
+    state.sources.push({ name, count: recs.length, fp: fingerprint(text) });
     state.fieldIndex = SL.buildFieldIndex(state.recs);
     autoSetup();
     if (errors.length) console.warn(errors);
@@ -1875,11 +1884,13 @@ window.SIGMALENS_DEMO = {"events": "{\"@timestamp\": \"2026-03-02T07:34:12.000Z\
 
   async function handleFiles(files) {
     let evFiles = 0, ruleFiles = 0;
-    const errs = [];
+    const errs = [], skipped = [];
     for (const f of files) {
       const text = await f.text();
       if (/\.ya?ml$/i.test(f.name)) { addRulesText(text, f.name); ruleFiles++; }
       else {
+        const dup = alreadyLoaded(text);
+        if (dup) { skipped.push(dup.name === f.name ? f.name : `${f.name} (same content as ${dup.name})`); continue; }
         const r = await addEventsText(text, f.name);
         evFiles++;
         if (r.errors.length) errs.push(...r.errors.slice(0, 3));
@@ -1888,6 +1899,7 @@ window.SIGMALENS_DEMO = {"events": "{\"@timestamp\": \"2026-03-02T07:34:12.000Z\
     updateStat();
     if (evFiles) { show('search'); runSearch(); }
     else if (ruleFiles) { renderRules(); show(state.recs.length ? 'rules' : state.view || 'search'); }
+    if (skipped.length) errs.unshift(`Already loaded, not added again (its events would be counted twice): ${skipped.join(', ')}. To start over, reload the page.`);
     if (errs.length) alertBar(errs.join('\n'));
   }
 

@@ -131,13 +131,22 @@
   }
 
   // ───────── loading ─────────
+  // Fingerprint of a file's content (length + FNV-1a), to spot the same file loaded twice
+  // (dropped again, or a copy with another name), which would count every event twice.
+  function fingerprint(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return `${text.length}:${(h >>> 0).toString(16)}`;
+  }
+  const alreadyLoaded = (text) => { const fp = fingerprint(text); return state.sources.find((s) => s.fp === fp); };
+
   async function addEventsText(text, name) {
     busy(`Parsing ${name}…`);
     await nextFrame();
     const load = /\.eml$/i.test(name) ? SL.loadEml : SL.loadEvents;
     const { recs, errors } = load(text, name, state.recs.length);
     for (const r of recs) state.recs.push(r);
-    state.sources.push({ name, count: recs.length });
+    state.sources.push({ name, count: recs.length, fp: fingerprint(text) });
     state.fieldIndex = SL.buildFieldIndex(state.recs);
     autoSetup();
     if (errors.length) console.warn(errors);
@@ -157,11 +166,13 @@
 
   async function handleFiles(files) {
     let evFiles = 0, ruleFiles = 0;
-    const errs = [];
+    const errs = [], skipped = [];
     for (const f of files) {
       const text = await f.text();
       if (/\.ya?ml$/i.test(f.name)) { addRulesText(text, f.name); ruleFiles++; }
       else {
+        const dup = alreadyLoaded(text);
+        if (dup) { skipped.push(dup.name === f.name ? f.name : `${f.name} (same content as ${dup.name})`); continue; }
         const r = await addEventsText(text, f.name);
         evFiles++;
         if (r.errors.length) errs.push(...r.errors.slice(0, 3));
@@ -170,6 +181,7 @@
     updateStat();
     if (evFiles) { show('search'); runSearch(); }
     else if (ruleFiles) { renderRules(); show(state.recs.length ? 'rules' : state.view || 'search'); }
+    if (skipped.length) errs.unshift(`Already loaded, not added again (its events would be counted twice): ${skipped.join(', ')}. To start over, reload the page.`);
     if (errs.length) alertBar(errs.join('\n'));
   }
 
