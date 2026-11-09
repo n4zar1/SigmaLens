@@ -19,7 +19,7 @@
   <label class="stat" for="profile">Mapping</label>
   <select class="btn" id="profile" title="Which events Sigma's process_creation category reads"></select>
   <button class="btn" id="open">Open files</button>
-  <input type="file" id="file" multiple accept=".json,.jsonl,.ndjson,.yml,.yaml" hidden>
+  <input type="file" id="file" multiple accept=".json,.jsonl,.ndjson,.eml,.yml,.yaml" hidden>
   <button class="btn ghost" id="help" title="Search and Sigma syntax">?</button>
   <button class="btn ghost" id="theme" title="Toggle light/dark">◐</button>
 </header>
@@ -35,7 +35,9 @@
     <div class="welcome">
       <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true" style="color:var(--accent)"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       <h1>Hunt through logs like in a SIEM</h1>
-      <p>Drop <b>JSON / JSONL</b> event logs and <b>Sigma</b> rules (.yml) anywhere on this page. Everything stays in your browser: nothing is uploaded.</p>
+      <p>Drop <b>JSON / JSONL</b> event logs, <b>.eml</b> emails and <b>Sigma</b> rules (.yml) anywhere on this page.</p>
+      <p style="font-size:12.5px">Windows, Linux, AWS CloudTrail, Entra ID, Microsoft 365, Okta, Google Cloud, Proofpoint TAP, Suricata, Zeek, proxy, web server, firewall and DNS logs are recognised automatically.</p>
+      <p> Everything stays in your browser: nothing is uploaded.</p>
       <div class="row">
         <button class="btn primary" id="open2">Open files</button>
         <button class="btn" id="demo" hidden>Load demo dataset</button>
@@ -139,9 +141,11 @@
       <ul>
         <li><b>JSONL</b> (one object per line): the recommended format.</li>
         <li>A <b>JSON array</b> of objects.</li>
+        <li>Files that wrap the events: CloudTrail / Azure exports (<code>{"Records":[…]}</code>) and <b>Proofpoint TAP</b> SIEM API responses (<code>{"messagesDelivered":[…],"clicksPermitted":[…]…}</code>). Each TAP event gets a <code>tap_event</code> field with the list it came from.</li>
+        <li><b>.eml</b> files: one event per message, with every header as a field (repeated headers such as <code>Received</code> are joined with line breaks) plus an analysis under <code>eml.*</code>: <code>eml.from_domain</code>, <code>eml.return_path_domain</code>, <code>eml.reply_to_domain</code>, <code>eml.spf</code> / <code>eml.dkim</code> / <code>eml.dmarc</code> (from the top <i>Authentication-Results</i>), <code>eml.received_ips</code>, <code>eml.origin_ip</code> (the bottom-most public hop), <code>eml.urls</code>, <code>eml.url_domains</code>, <code>eml.attachments</code>, <code>eml.attachment_types</code>, <code>eml.attachment_sha256</code> and <code>eml.body</code>.</li>
         <li><b>evtx_dump / python-evtx</b> output (<code>{"Event":{"System":…,"EventData":…}}</code>), which is flattened automatically: <code>EventID</code>, <code>Channel</code>, <code>Computer</code>, <code>EventRecordID</code>, <code>Provider</code> and <code>@timestamp</code> come from <i>System</i>, and every <i>EventData</i> value becomes its own field.</li>
       </ul>
-      <p>Other nested objects become dotted names, for example <code>process.parent.name</code>. The event time is taken from the first field present among <code>@timestamp</code>, <code>TimeCreated</code>, <code>SystemTime</code>, <code>UtcTime</code>, <code>timestamp</code> and <code>time</code>. A time without a zone is read as <b>UTC</b>, and all times on screen are UTC.</p>
+      <p>Other nested objects become dotted names, for example <code>userIdentity.arn</code>. Lists of objects are kept as JSON and also get one field per key with the values joined: <code>threatsInfoMap.classification</code> = <code>phish, malware</code> (use <code>|contains</code> on those). The event time is taken from the first field present among <code>@timestamp</code>, <code>TimeCreated</code>, <code>SystemTime</code>, <code>UtcTime</code>, <code>timestamp</code>, <code>time</code>, <code>eventTime</code>, <code>TimeGenerated</code>, <code>CreationTime</code>, <code>createdDateTime</code>, <code>published</code>, <code>messageTime</code>, <code>clickTime</code>, <code>ts</code> and <code>__REALTIME_TIMESTAMP</code> (epoch seconds, milliseconds and microseconds work too), or from W3C <code>date</code> + <code>time</code>. A time without a zone is read as <b>UTC</b>, and all times on screen are UTC.</p>
       <h3>Converting .evtx files</h3>
       <p>Browsers can't read the binary .evtx format, so convert them first. On Windows, the bundled script uses only built-in cmdlets:</p>
       <pre>.\tools\evtx2jsonl.ps1 -Path .\Logs\*.evtx -OutDir .\jsonl</pre>
@@ -177,6 +181,7 @@
           <tr><td><code>(EventID:3 OR EventID:22) Image:*updsvc*</code></td><td>Parentheses group conditions.</td><td><button class="try" data-try-q="(EventID:3 OR EventID:22) Image:*updsvc*">Try it</button></td></tr>
           <tr><td><code>DestinationPort:&gt;=1024</code></td><td>Numeric comparison: <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code>.</td><td><button class="try" data-try-q="EventID:3 AND DestinationPort:>=1024">Try it</button></td></tr>
           <tr><td><code>_exists_:ScriptBlockText</code></td><td>The field is present and not empty. <code>Field:*</code> does the same.</td><td><button class="try" data-try-q="_exists_:ScriptBlockText">Try it</button></td></tr>
+          <tr><td><code>_source_:linux</code></td><td>Events recognised as that source: a product (<code>aws</code>, <code>linux</code>…), a service (<code>sshd</code>, <code>cloudtrail</code>…), a category (<code>proxy</code>, <code>webserver</code>…) or the label in the <b>Source</b> column. Wildcards work.</td><td></td></tr>
         </tbody>
       </table>
       <p class="tip"><b>Equals vs contains.</b> <code>CommandLine:whoami</code> only matches a command line that is exactly <code>whoami</code>. To find it anywhere in the command line use <code>CommandLine:*whoami*</code>, or plain <code>whoami</code> to look in every field.</p>
@@ -249,6 +254,9 @@ level: medium</pre>
       <p>The <code>logsource</code> decides which events a rule reads. <code>product: windows</code> plus a <code>category</code> selects events by log channel and event ID:</p>
       <div id="maptable"></div>
       <p><code>service</code> selects a whole log: <span id="servicelist"></span>.</p>
+      <h3>Other sources</h3>
+      <p>Events that are not Windows are recognised by the fields they have, so no configuration is needed. This is what each <code>logsource</code> reads. A rule for <code>product: aws</code> only reads CloudTrail events, even if the same session also holds Windows or Linux logs. The <b>Source</b> column of the results shows what each event was recognised as, and you can search by it with <code>_source_:</code>, for example <code>_source_:linux</code>, <code>_source_:sshd</code> or <code>_source_:proxy</code>.</p>
+      <div id="sourcetable"></div>
       <p>The <b>Mapping</b> selector in the top bar changes what <code>process_creation</code> reads:</p>
       <ul>
         <li><b>Sysmon</b> (default): Sysmon event 1.</li>
@@ -291,7 +299,7 @@ level: medium</pre>
   </section>
 </main>
 
-<div class="drop" id="drop" hidden><div>Drop logs (.json, .jsonl) or Sigma rules (.yml)</div></div>
+<div class="drop" id="drop" hidden><div>Drop logs (.json, .jsonl), emails (.eml) or Sigma rules (.yml)</div></div>
 <div class="busy" id="busy" hidden></div>
 
 <dialog id="helpdlg">
@@ -305,6 +313,7 @@ level: medium</pre>
     <tr><td>A AND B · A OR B · NOT A</td><td>also <code>&amp;&amp;</code> <code>||</code> <code>!</code> or a leading <code>-</code>; terms side by side mean AND</td></tr>
     <tr><td>DestinationPort:&gt;=1024</td><td>numeric comparison</td></tr>
     <tr><td>_exists_:QueryName · Field:*</td><td>field present and not empty</td></tr>
+    <tr><td>_source_:aws · _source_:sshd</td><td>events from that source</td></tr>
   </table>
   <h3>Sigma</h3>
   <p class="muted" style="margin:4px 0">Supports maps and lists of maps, keyword lists, <code>condition</code> with and/or/not, parentheses, <code>1 of x*</code>, <code>all of them</code>; modifiers <code>contains startswith endswith all re i m s cased exists gt gte lt lte cidr windash</code>. Values use Sigma escaping: <code>*</code> and <code>?</code> are wildcards, <code>\*</code> is a literal asterisk. Not supported: aggregations, correlations, base64 modifiers.</p>

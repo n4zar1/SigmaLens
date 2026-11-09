@@ -35,8 +35,50 @@
   const toLocalInput = (t) => fmtTime(t).slice(0, 19).replace(' ', 'T');
   const fromInput = (v) => (v ? Date.parse(v.length === 16 ? `${v}:00Z` : `${v}Z`) : NaN);
   const chanShort = (c) => CHANNEL_SHORT[String(c || '').toLowerCase()] || (c ? String(c).split('/')[0].replace('Microsoft-Windows-', '') : '—');
+  const srcLabel = (ev) => { const s = SL.sourceOf(ev); return s.product === 'windows' || !s.label ? chanShort(ev.Channel) : s.label; };
+  const srcId = (ev) => { const s = SL.sourceOf(ev); return s.product === 'windows' ? (ev.EventID ?? '') : s.id; };
+
+  // one-line summary for sources other than Windows
+  function otherDetails(ev, s) {
+    const j = (...xs) => xs.filter((x) => x != null && x !== '' && x !== '-').join(' ');
+    const g = (...ks) => { for (const k of ks) if (ev[k] != null && ev[k] !== '') return ev[k]; return undefined; };
+    const svc = s.services;
+    const pre = (label, v) => (v != null && v !== '' ? `${label} ${v}` : '');
+    switch (s.product) {
+      case 'aws': return j(g('userIdentity.arn', 'userIdentity.userName', 'userIdentity.type'), pre('from', ev.sourceIPAddress), ev.errorCode ? `✗ ${ev.errorCode}` : '');
+      case 'azure':
+        if (svc.includes('signinlogs')) return j(g('UserPrincipalName', 'properties.userPrincipalName'), pre('from', g('IPAddress', 'callerIpAddress', 'properties.ipAddress')), g('Location', 'properties.location.countryOrRegion'), '·', g('AppDisplayName', 'properties.appDisplayName'));
+        return j(g('InitiatedBy.user.userPrincipalName', 'Caller', 'Identity'), pre('→', g('TargetResources.displayName', 'TargetResources.userPrincipalName', 'ResourceId', 'Resource')), g('Result', 'ActivityStatusValue'));
+      case 'm365': return j(ev.UserId, pre('from', ev.ClientIP), ev.ObjectId ? `· ${ev.ObjectId}` : '', ev.ResultStatus);
+      case 'okta': return j(ev['actor.alternateId'], pre('from', ev['client.ipAddress']), '·', ev.displayMessage, ev['outcome.result']);
+      case 'gcp': return j(ev['protoPayload.authenticationInfo.principalEmail'], pre('from', ev['protoPayload.requestMetadata.callerIp']), pre('→', ev['protoPayload.resourceName']));
+      case 'proofpoint':
+        if (svc.includes('tap_clicks')) return j(ev.recipient, pre('clicked', ev.url), pre('from', ev.clickIP), ev.classification ? `(${ev.classification})` : '');
+        return j(g('fromAddress', 'sender'), pre('→', g('recipient', 'toAddresses')), '·', ev.subject, ev['threatsInfoMap.classification'] ? `[${ev['threatsInfoMap.classification']}]` : '');
+      case 'email': return j(ev['eml.from_address'], pre('→', ev.To), '·', ev.Subject);
+      case 'suricata': {
+        const flow = j(`${ev.src_ip}${ev.src_port != null ? ':' + ev.src_port : ''}`, '→', `${ev.dest_ip}${ev.dest_port != null ? ':' + ev.dest_port : ''}`);
+        if (ev['alert.signature']) return j(ev['alert.signature'], '·', flow);
+        return j(flow, g('dns.rrname', 'dns.queries.rrname', 'http.hostname', 'tls.sni'), ev['http.url'] || '');
+      }
+      case 'zeek': return j(ev['id.orig_h'], '→', `${ev['id.resp_h']}:${ev['id.resp_p']}`, g('query', 'server_name') || (ev.host ? `${ev.host}${ev.uri || ''}` : ev.conn_state));
+      case 'linux':
+        if (svc.includes('auditd')) return j(g('proctitle', 'exe', 'comm'), ev.msg || '', ev.res ? `res=${ev.res}` : '');
+        return j(ev.host || ev.hostname || ev._HOSTNAME, g('message', 'MESSAGE', 'msg'));
+      default: break;
+    }
+    switch (s.category) {
+      case 'proxy': return j(ev['c-ip'], pre('→', g('c-uri', 'cs-host')), ev['c-useragent'] ? `· ${ev['c-useragent']}` : '');
+      case 'webserver': return j(ev['c-ip'], ev['cs-method'], `${ev['cs-uri-stem'] || ''}${ev['cs-uri-query'] ? '?' + ev['cs-uri-query'] : ''}`, ev['cs-user-agent'] ? `· ${ev['cs-user-agent']}` : '');
+      case 'firewall': return j(`${g('src_ip', 'src')}${ev.src_port != null ? ':' + ev.src_port : ''}`, '→', `${g('dst_ip', 'dst')}${ev.dst_port != null ? ':' + ev.dst_port : ''}`, ev.proto || ev.protocol, ev.action ? `(${ev.action})` : '');
+      case 'dns': return j(g('src_ip', 'client_ip'), pre('→', ev.query), ev.answer ? `= ${ev.answer}` : '');
+      default: return null;
+    }
+  }
 
   function details(ev) {
+    const s = SL.sourceOf(ev);
+    if (s.product !== 'windows') { const o = otherDetails(ev, s); if (o) return o; }
     const id = Number(ev.EventID), ch = String(ev.Channel || '').toLowerCase();
     const sysmon = ch.includes('sysmon');
     const j = (...xs) => xs.filter((x) => x != null && x !== '' && x !== '-').join(' ');
@@ -54,7 +96,7 @@
     if (id === 4688) return ev.CommandLine || ev.NewProcessName;
     if (id >= 4698 && id <= 4702) return j(ev.SubjectUserName, '·', ev.TaskName);
     if (id === 4624 || id === 4625) return j(ev.TargetDomainName ? `${ev.TargetDomainName}\\${ev.TargetUserName}` : ev.TargetUserName, 'type', ev.LogonType, ev.IpAddress && ev.IpAddress !== '-' ? `from ${ev.IpAddress}` : '');
-    const skip = new Set(['@timestamp', 'EventID', 'Channel', 'Computer', 'EventRecordID', 'Provider', 'Level', 'Task', 'Keywords', 'Version', 'Opcode']);
+    const skip = new Set(['@timestamp', 'EventID', 'Channel', 'Computer', 'EventRecordID', 'Provider', 'Level', 'Task', 'Keywords', 'Version', 'Opcode', 'timestamp', 'time', 'eventTime', 'TimeGenerated', 'CreationTime', 'ts']);
     return Object.entries(ev).filter(([k, v]) => !skip.has(k) && v != null && v !== '').slice(0, 4).map(([k, v]) => `${k}=${v}`).join('  ');
   }
 
@@ -92,7 +134,8 @@
   async function addEventsText(text, name) {
     busy(`Parsing ${name}…`);
     await nextFrame();
-    const { recs, errors } = SL.loadEvents(text, name, state.recs.length);
+    const load = /\.eml$/i.test(name) ? SL.loadEml : SL.loadEvents;
+    const { recs, errors } = load(text, name, state.recs.length);
     for (const r of recs) state.recs.push(r);
     state.sources.push({ name, count: recs.length });
     state.fieldIndex = SL.buildFieldIndex(state.recs);
@@ -249,7 +292,7 @@
       const ev = r.ev;
       const det = String(details(ev) ?? '');
       const open = openSet.has(r.i);
-      html += `<tr class="row${open ? ' open' : ''}" data-i="${r.i}"><td class="time">${esc(fmtTime(r.t))}</td><td><span class="chan">${esc(chanShort(ev.Channel))}</span></td><td>${esc(ev.EventID ?? '')}</td>`;
+      html += `<tr class="row${open ? ' open' : ''}" data-i="${r.i}"><td class="time">${esc(fmtTime(r.t))}</td><td><span class="chan">${esc(srcLabel(ev))}</span></td><td>${esc(srcId(ev))}</td>`;
       for (const f of state.extraCols) html += `<td class="det">${esc(ev[f] ?? '')}</td>`;
       html += `<td class="det">${esc(det.length > 400 ? det.slice(0, 400) + '…' : det)}</td></tr>`;
       if (open) {
@@ -311,11 +354,13 @@
   }
 
   function exportCsv() {
-    const keys = ['@timestamp', 'Channel', 'EventID', 'Computer', ...state.extraCols];
-    const allKeys = new Set(keys);
     const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const lines = [[...allKeys, 'Details'].map(q).join(',')];
-    for (const r of state.results) lines.push([...[...allKeys].map((k) => (k === '@timestamp' ? fmtTime(r.t) : r.ev[k])), details(r.ev)].map(q).join(','));
+    const lines = [['Time (UTC)', 'Source', 'ID', 'Host', ...state.extraCols, 'Details', 'File'].map(q).join(',')];
+    for (const r of state.results) {
+      const ev = r.ev;
+      const host = ev.Computer ?? ev.host ?? ev.hostname ?? ev._HOSTNAME ?? '';
+      lines.push([fmtTime(r.t), srcLabel(ev), srcId(ev), host, ...state.extraCols.map((k) => ev[k]), details(ev), r.src].map(q).join(','));
+    }
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -574,6 +619,8 @@ level: medium
         cat === 'process_creation' ? 'depends on <b>Mapping</b> (below)' : pairs.map(([ch, ids]) => `${esc(chanShort(ch))} ${esc(ids.join(', '))}`).join(' · ')
       }</td></tr>`).join('')}</tbody></table>`;
     $('servicelist').innerHTML = Object.entries(SL.CHANNELS).map(([s, ch]) => `<code>${esc(s)}</code> → ${esc(ch)}`).join(', ');
+    $('sourcetable').innerHTML = `<table class="ref"><thead><tr><th>source</th><th>logsource</th><th>recognised by</th></tr></thead><tbody>${
+      SL.SOURCES.map((x) => `<tr><td>${esc(x.name)}</td><td><code>${esc(x.logsource)}</code></td><td>${esc(x.how)}</td></tr>`).join('')}</tbody></table>`;
     if (!demo) $('g-demo-hint').innerHTML = 'Examples marked <span class="try-badge">Try it</span> run against the loaded data. They were written for the demo dataset (<code>dist/sigmalens-demo.html</code>), so with your own logs some may return nothing.';
     document.addEventListener('click', async (e) => {
       const go = e.target.closest('[data-goto]');

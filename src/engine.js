@@ -2,6 +2,8 @@
  * SigmaLens engine. No dependencies; runs in the browser and in Node.
  *  - parseYaml / parseYamlDocs: the YAML subset used by Sigma rules
  *  - loadEvents: JSON / JSONL / evtx_dump-style JSON -> flat records
+ *  - loadEml: an .eml message -> one record with its headers analysed
+ *  - sourceOf: which product / service / category an event comes from (by its shape)
  *  - compileQuery: Lucene-like search language
  *  - compileRule: Sigma rule -> matcher (detection, condition, modifiers, logsource mapping)
  */
@@ -199,11 +201,18 @@
 
   // ───────────────────────── Events ─────────────────────────
 
-  const TIME_FIELDS = ['@timestamp', 'TimeCreated', 'SystemTime', 'UtcTime', 'timestamp', 'Timestamp', 'time'];
+  const TIME_FIELDS = ['@timestamp', 'TimeCreated', 'SystemTime', 'UtcTime', 'timestamp', 'Timestamp', 'time',
+    'eventTime', 'TimeGenerated', 'CreationTime', 'createdDateTime', 'CreatedDateTime', 'published',
+    'messageTime', 'clickTime', 'ts', '__REALTIME_TIMESTAMP', 'Date'];
 
   function parseTime(v) {
     if (v == null || v === '') return NaN;
     let s = String(v).trim();
+    if (/^\d{9,17}(\.\d+)?$/.test(s)) {
+      // epoch: seconds (Zeek ts), milliseconds or microseconds (journald)
+      const n = Number(s);
+      return n > 1e14 ? Math.floor(n / 1000) : n > 1e11 ? n : Math.round(n * 1000);
+    }
     if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) {
       s = s.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1');
       if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
@@ -215,8 +224,21 @@
     for (const [k, v] of Object.entries(o)) {
       const key = prefix ? `${prefix}.${k}` : k;
       if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, key, out);
-      else if (Array.isArray(v)) out[key] = v.every((x) => x === null || typeof x !== 'object') ? v.join(', ') : JSON.stringify(v);
-      else out[key] = v;
+      else if (Array.isArray(v)) {
+        if (v.every((x) => x === null || typeof x !== 'object')) { out[key] = v.join(', '); continue; }
+        out[key] = JSON.stringify(v);
+        // [{classification:'phish'},{classification:'spam'}] -> key.classification = 'phish, spam'
+        const subs = new Map();
+        for (const x of v) {
+          if (!x || typeof x !== 'object' || Array.isArray(x)) continue;
+          for (const [sk, sv] of Object.entries(x)) {
+            if (sv !== null && typeof sv === 'object') continue;
+            if (!subs.has(sk)) subs.set(sk, new Set());
+            subs.get(sk).add(String(sv));
+          }
+        }
+        for (const [sk, set] of subs) if (!(`${key}.${sk}` in out)) out[`${key}.${sk}`] = [...set].join(', ');
+      } else out[key] = v;
     }
     return out;
   }
@@ -264,23 +286,360 @@
     let objs = [];
     const s = String(text).replace(/^﻿/, '').trim();
     if (!s) return { recs, errors };
-    if (s[0] === '[') {
-      try { objs = JSON.parse(s); } catch (e) { errors.push(`${src}: invalid JSON array (${e.message})`); }
-    } else {
+    let whole = null;
+    if (s[0] === '[' || s[0] === '{') { try { whole = JSON.parse(s); } catch (e) { whole = null; } }
+    if (whole !== null) objs = Array.isArray(whole) ? whole : [whole];
+    else if (s[0] === '[') errors.push(`${src}: invalid JSON array`);
+    else {
       s.split(/\r?\n/).forEach((line, n) => {
         if (!line.trim()) return;
         try { objs.push(JSON.parse(line)); } catch (e) { if (errors.length < 20) errors.push(`${src}:${n + 1}: invalid JSON line`); }
       });
     }
     let i = startIndex || 0;
-    for (const o of objs) {
+    for (const o of unwrap(objs)) {
       if (!o || typeof o !== 'object') continue;
       const ev = normalizeEvent(o);
-      let t = NaN;
-      for (const f of TIME_FIELDS) { if (ev[f] != null && ev[f] !== '') { t = parseTime(ev[f]); if (!isNaN(t)) break; } }
-      recs.push(new Rec(ev, t, src, i++));
+      recs.push(new Rec(ev, eventTime(ev), src, i++));
     }
     return { recs, errors };
+  }
+
+  const TAP_LISTS = ['messagesDelivered', 'messagesBlocked', 'clicksPermitted', 'clicksBlocked'];
+
+  // Containers that hold the real events: CloudTrail / Azure storage exports ({"Records":[…]})
+  // and Proofpoint TAP SIEM API responses ({"messagesDelivered":[…],"clicksPermitted":[…]…}).
+  function unwrap(objs) {
+    const out = [];
+    for (const o of objs) {
+      if (o && typeof o === 'object' && !Array.isArray(o)) {
+        const tap = TAP_LISTS.filter((k) => Array.isArray(o[k]));
+        if (tap.length) {
+          for (const k of tap) for (const x of o[k]) if (x && typeof x === 'object') out.push(Object.assign({ tap_event: k }, x));
+          continue;
+        }
+        const recArr = Array.isArray(o.Records) ? o.Records : Array.isArray(o.records) ? o.records : null;
+        if (recArr && Object.keys(o).length <= 3) { out.push(...recArr); continue; }
+      }
+      out.push(o);
+    }
+    return out;
+  }
+
+  function eventTime(ev) {
+    // W3C web/proxy logs keep date and time apart
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(ev.date || '')) && /^\d{2}:\d{2}/.test(String(ev.time || ''))) {
+      const t = parseTime(`${ev.date}T${ev.time}`);
+      if (!isNaN(t)) return t;
+    }
+    for (const f of TIME_FIELDS) {
+      if (ev[f] != null && ev[f] !== '') { const t = parseTime(ev[f]); if (!isNaN(t)) return t; }
+    }
+    return NaN;
+  }
+
+  // ───────────────────────── Sources ─────────────────────────
+  // Where an event comes from, worked out from the fields it has. Cached on the event
+  // as a non-enumerable property, so it is never shown, searched or exported.
+
+  const lc = (x) => String(x == null ? '' : x).toLowerCase();
+  const has = (ev, k) => ev[k] != null && ev[k] !== '';
+  const mk = (product, services, category, label, id) => ({ product, services: services || [], category: category || null, label: label || null, id: id == null ? '' : String(id) });
+
+  const LINUX_PROGRAMS = {
+    sshd: ['sshd', 'auth'], sudo: ['sudo', 'auth'], su: ['auth'], login: ['auth'], 'systemd-logind': ['auth'],
+    passwd: ['auth'], useradd: ['auth'], usermod: ['auth'], userdel: ['auth'], groupadd: ['auth'], groupmod: ['auth'],
+    gpasswd: ['auth'], chpasswd: ['auth'], chage: ['auth'], unix_chkpwd: ['auth'], polkitd: ['auth'], pkexec: ['auth'],
+    cron: ['cron'], crond: ['cron'], anacron: ['cron'], vsftpd: ['vsftpd'], clamd: ['clamav'], freshclam: ['clamav'],
+  };
+  const AUDITD_TYPE = /^(SYSCALL|EXECVE|PATH|PROCTITLE|CWD|SOCKADDR|LOGIN|TTY|AVC|BPRM_FCAPS|CONFIG_CHANGE|KERN_MODULE|NETFILTER_CFG|SERVICE_START|SERVICE_STOP|(ADD|DEL)_(USER|GROUP)|(USER|CRED|ANOM|DAEMON|SYSTEM|MAC)_[A-Z_]+)$/;
+  const LINUX_SYSMON = { 1: 'process_creation', 3: 'network_connection', 5: 'process_termination', 11: 'file_event', 23: 'file_delete' };
+  const HTTP_ID = (ev) => [ev['cs-method'], ev['sc-status']].filter((x) => x != null && x !== '').join(' ');
+
+  function detectSource(ev) {
+    const ch = lc(ev.Channel);
+    if (ch && has(ev, 'EventID')) {
+      if (ch.startsWith('linux-sysmon')) return mk('linux', ['sysmon'], LINUX_SYSMON[Number(ev.EventID)], 'Sysmon Linux', ev.EventID);
+      return mk('windows', Object.keys(CH).filter((k) => CH[k].toLowerCase() === ch), null, null, ev.EventID);
+    }
+    if (/\.amazonaws\.com$/i.test(String(ev.eventSource || '')) && has(ev, 'eventName')) return mk('aws', ['cloudtrail'], null, 'CloudTrail', ev.eventName);
+    if (has(ev, 'protoPayload.methodName')) return mk('gcp', ['gcp.audit'], null, 'GCP audit', ev['protoPayload.methodName']);
+    const az = lc(ev.Type || ev.category);
+    if (az === 'signinlogs' || az === 'noninteractiveusersigninlogs' || (has(ev, 'UserPrincipalName') && ev.ResultType != null && has(ev, 'AppDisplayName'))) {
+      return mk('azure', ['signinlogs'], null, 'Entra sign-in', ev.ResultType != null ? ev.ResultType : ev.resultType);
+    }
+    if (az === 'auditlogs' || (has(ev, 'OperationName') && has(ev, 'Category') && Object.keys(ev).some((k) => /^(InitiatedBy|TargetResources)/.test(k)))) {
+      return mk('azure', ['auditlogs'], null, 'Entra audit', ev.OperationName || ev.operationName);
+    }
+    if (az === 'azureactivity' || has(ev, 'OperationNameValue')) return mk('azure', ['activitylogs'], null, 'Azure activity', ev.OperationNameValue || ev.OperationName || ev.operationName);
+    if (has(ev, 'Operation') && has(ev, 'Workload') && (ev.RecordType != null || has(ev, 'UserId'))) {
+      const w = lc(ev.Workload), svc = ['audit'];
+      if (w === 'exchange') svc.push('exchange');
+      if (w === 'securitycompliancecenter' || w === 'threatintelligence') svc.push('threat_management');
+      return mk('m365', svc, null, `M365 ${ev.Workload}`, ev.Operation);
+    }
+    if (has(ev, 'eventType') && (has(ev, 'actor.alternateId') || has(ev, 'displayMessage'))) return mk('okta', ['okta'], null, 'Okta', ev.eventType);
+    if (has(ev, 'GUID') && (ev.threatsInfoMap != null || has(ev, 'clickTime') || ev.spamScore != null || ev.phishScore != null)) {
+      const click = has(ev, 'clickTime') || /^clicks/.test(String(ev.tap_event || ''));
+      return mk('proofpoint', ['tap', click ? 'tap_clicks' : 'tap_messages'], null, 'Proofpoint TAP', ev.tap_event || (click ? 'click' : 'message'));
+    }
+    if (has(ev, 'event_type') && (ev.flow_id != null || (has(ev, 'src_ip') && has(ev, 'dest_ip')))) {
+      const t = lc(ev.event_type);
+      return mk('suricata', [t], null, 'Suricata', t === 'alert' && ev['alert.signature_id'] != null ? `alert ${ev['alert.signature_id']}` : t);
+    }
+    if (has(ev, 'uid') && has(ev, 'id.orig_h')) {
+      const p = lc(ev._path) || (has(ev, 'query') ? 'dns' : has(ev, 'method') ? 'http' : has(ev, 'server_name') || has(ev, 'ja3') ? 'ssl' : has(ev, 'mailfrom') ? 'smtp' : 'conn');
+      return mk('zeek', [p], null, `Zeek ${p}`, p);
+    }
+    if (has(ev, 'type') && AUDITD_TYPE.test(String(ev.type)) && (ev.auid != null || ev.syscall != null || has(ev, 'msg') || has(ev, 'exe') || ev.a0 != null)) {
+      return mk('linux', ['auditd'], null, 'auditd', ev.type);
+    }
+    const prog = [ev.program, ev.appname, ev.ident, ev.SYSLOG_IDENTIFIER, ev['process.name'], ev['syslog.appname']].find((x) => x != null && x !== '');
+    const msg = [ev.message, ev.MESSAGE, ev.msg].find((x) => x != null);
+    if (prog != null && msg != null && !Object.keys(ev).some((k) => k.startsWith('winlog.'))) {
+      const svc = new Set(LINUX_PROGRAMS[lc(prog)] || []);
+      if (/auth\.log|\/secure$/.test(lc(ev.log_file || ev['log.file.path'] || ev.file))) svc.add('auth');
+      svc.add('syslog');
+      return mk('linux', [...svc], null, 'Linux', prog);
+    }
+    if (has(ev, 'c-uri') || has(ev, 'r-dns') || (has(ev, 'cs-host') && has(ev, 'c-useragent'))) return mk(null, [], 'proxy', 'Proxy', HTTP_ID(ev));
+    if (has(ev, 'cs-uri-stem') || has(ev, 'cs-uri-query') || (has(ev, 'cs-method') && ev['sc-status'] != null)) return mk(null, [], 'webserver', 'Web', HTTP_ID(ev));
+    if ((has(ev, 'src_ip') || has(ev, 'src')) && (has(ev, 'dst_ip') || has(ev, 'dst')) && (has(ev, 'action') || ev.dst_port != null)) return mk(null, [], 'firewall', 'Firewall', ev.action);
+    if (has(ev, 'query') && (has(ev, 'record_type') || has(ev, 'answer') || has(ev, 'qtype') || has(ev, 'query_type'))) return mk(null, [], 'dns', 'DNS', ev.record_type || ev.qtype || ev.query_type);
+    return mk(null, [], null, null, '');
+  }
+
+  function sourceOf(ev) {
+    if (!ev.__sl) Object.defineProperty(ev, '__sl', { value: detectSource(ev), enumerable: false, writable: true, configurable: true });
+    return ev.__sl;
+  }
+
+  // For the guide: what SigmaLens recognises and the logsource that selects it.
+  const SOURCES = [
+    { name: 'Windows event logs', logsource: 'product: windows + category / service', how: 'Channel and EventID' },
+    { name: 'Linux syslog / journald', logsource: 'product: linux · service: auth, sshd, sudo, cron, syslog', how: 'program / appname / SYSLOG_IDENTIFIER + message' },
+    { name: 'Linux auditd', logsource: 'product: linux · service: auditd', how: 'type (SYSCALL, EXECVE, USER_LOGIN…)' },
+    { name: 'Sysmon for Linux', logsource: 'product: linux · category: process_creation, network_connection, file_event', how: 'Channel Linux-Sysmon/Operational' },
+    { name: 'AWS CloudTrail', logsource: 'product: aws · service: cloudtrail', how: 'eventSource *.amazonaws.com + eventName (also {"Records":[…]} files)' },
+    { name: 'Entra ID sign-ins', logsource: 'product: azure · service: signinlogs', how: 'Type/category SigninLogs, or UserPrincipalName + ResultType + AppDisplayName' },
+    { name: 'Entra ID audit', logsource: 'product: azure · service: auditlogs', how: 'Type/category AuditLogs' },
+    { name: 'Azure activity', logsource: 'product: azure · service: activitylogs', how: 'Type AzureActivity or OperationNameValue' },
+    { name: 'Microsoft 365 audit', logsource: 'product: m365 · service: audit, exchange, threat_management', how: 'Operation + Workload' },
+    { name: 'Google Cloud audit', logsource: 'product: gcp · service: gcp.audit', how: 'protoPayload.methodName' },
+    { name: 'Okta system log', logsource: 'product: okta · service: okta', how: 'eventType + actor.alternateId' },
+    { name: 'Proofpoint TAP', logsource: 'product: proofpoint · service: tap, tap_messages, tap_clicks', how: 'GUID + threatsInfoMap / clickTime (also SIEM API responses)' },
+    { name: 'Email (.eml)', logsource: 'product: email · service: eml', how: 'loaded from .eml files' },
+    { name: 'Suricata EVE', logsource: 'product: suricata · service: alert, dns, http, tls, flow…', how: 'event_type + flow_id' },
+    { name: 'Zeek', logsource: 'product: zeek · service: conn, dns, http, ssl…', how: 'uid + id.orig_h (_path if present)' },
+    { name: 'Web proxy', logsource: 'category: proxy', how: 'c-uri, r-dns or cs-host + c-useragent' },
+    { name: 'Web server', logsource: 'category: webserver', how: 'cs-uri-stem, cs-uri-query or cs-method + sc-status' },
+    { name: 'Firewall', logsource: 'category: firewall', how: 'src_ip + dst_ip + action / dst_port' },
+    { name: 'DNS server', logsource: 'category: dns', how: 'query + record_type / answer' },
+  ];
+
+  // ───────────────────────── Email (.eml) ─────────────────────────
+
+  const B64 = (() => { const t = new Int16Array(128).fill(-1); 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.split('').forEach((c, i) => { t[c.charCodeAt(0)] = i; }); return t; })();
+  function b64bytes(str) {
+    const out = new Uint8Array(Math.ceil(str.length * 3 / 4));
+    let n = 0, buf = 0, bits = 0;
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i), v = c < 128 ? B64[c] : -1;
+      if (v < 0) continue;
+      buf = ((buf << 6) | v) & 0xffffff; bits += 6;
+      if (bits >= 8) { bits -= 8; out[n++] = (buf >> bits) & 255; }
+    }
+    return out.subarray(0, n);
+  }
+  const utf8 = (str) => new TextEncoder().encode(str);
+  function qpbytes(str) {
+    const s = str.replace(/=\r?\n/g, '');
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(s.substr(i + 1, 2))) { out.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; continue; }
+      const c = s.charCodeAt(i);
+      if (c < 128) out.push(c); else out.push(...utf8(s[i]));
+    }
+    return Uint8Array.from(out);
+  }
+  function decodeBytes(bytes, charset) {
+    try { return new TextDecoder(charset || 'utf-8').decode(bytes); } catch (e) { return new TextDecoder('utf-8').decode(bytes); }
+  }
+  // RFC 2047: =?utf-8?B?…?= and =?iso-8859-1?Q?…?=
+  function decodeWords(v) {
+    return String(v || '').replace(/(\?=)\s+(=\?)/g, '$1$2').replace(/=\?([^?\s]+)\?([BbQq])\?([^?]*)\?=/g, (m, cs, enc, txt) => {
+      const bytes = enc.toUpperCase() === 'B' ? b64bytes(txt) : qpbytes(txt.replace(/_/g, ' '));
+      return decodeBytes(bytes, cs.split('*')[0]);
+    });
+  }
+  function splitMessage(raw) {
+    const m = /\r?\n\r?\n/.exec(raw);
+    const head = m ? raw.slice(0, m.index) : raw, body = m ? raw.slice(m.index + m[0].length) : '';
+    const headers = [];
+    for (const line of head.replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
+      const i = line.indexOf(':');
+      if (i > 0 && /^[!-9;-~]+$/.test(line.slice(0, i))) headers.push([line.slice(0, i), line.slice(i + 1).trim()]);
+    }
+    return { headers, body };
+  }
+  function headerParams(v) {
+    const out = {};
+    const re = /;\s*([\w*.-]+)\s*=\s*("(?:[^"\\]|\\.)*"|[^;]*)/g;
+    let m;
+    while ((m = re.exec(String(v || '')))) {
+      let k = m[1].toLowerCase(), val = m[2].trim();
+      if (val[0] === '"') val = val.slice(1, -1).replace(/\\(.)/g, '$1');
+      if (k.endsWith('*')) { // RFC 2231: utf-8''na%C3%AFve.pdf
+        k = k.slice(0, -1);
+        const p = /^([^']*)'[^']*'(.*)$/.exec(val);
+        if (p) { try { val = decodeURIComponent(p[2]); } catch (e) { val = p[2]; } }
+      }
+      out[k] = val;
+    }
+    return out;
+  }
+  function walkPart(raw, acc, depth) {
+    const { headers, body } = splitMessage(raw);
+    const get = (n) => { const h = headers.find(([k]) => k.toLowerCase() === n); return h ? h[1] : ''; };
+    const ctype = get('content-type') || 'text/plain';
+    const type = ctype.split(';')[0].trim().toLowerCase();
+    const params = headerParams(ctype);
+    const disp = get('content-disposition');
+    if (type.startsWith('multipart/') && params.boundary && depth < 12) {
+      const b = `--${params.boundary}`;
+      let cur = null;
+      for (const line of body.split(/\r?\n/)) {
+        const t = line.trimEnd();
+        if (t === b || t === `${b}--`) {
+          if (cur) walkPart(cur.join('\n'), acc, depth + 1);
+          cur = t === b ? [] : null;
+          if (!cur) break;
+          continue;
+        }
+        if (cur) cur.push(line);
+      }
+      return;
+    }
+    const cte = get('content-transfer-encoding').trim().toLowerCase();
+    const bytes = cte === 'base64' ? b64bytes(body) : cte === 'quoted-printable' ? qpbytes(body) : utf8(body);
+    const name = decodeWords(headerParams(disp).filename || params.name || '');
+    const isFile = !!name || /^attachment/i.test(disp) || !(type.startsWith('text/') || type.startsWith('multipart/'));
+    if (isFile) acc.files.push({ name: name || '(unnamed)', type, size: bytes.length, sha256: sha256(bytes) });
+    else if (type === 'text/html') acc.html.push(decodeBytes(bytes, params.charset));
+    else acc.text.push(decodeBytes(bytes, params.charset));
+  }
+
+  const CANON_HEADERS = ['From', 'To', 'Cc', 'Bcc', 'Subject', 'Date', 'Message-ID', 'Return-Path', 'Reply-To', 'Sender',
+    'Received', 'Received-SPF', 'Authentication-Results', 'DKIM-Signature', 'X-Mailer', 'User-Agent', 'X-Originating-IP',
+    'Content-Type', 'MIME-Version', 'List-Unsubscribe', 'X-Priority', 'Delivered-To', 'In-Reply-To', 'References'];
+  const CANON = new Map(CANON_HEADERS.map((h) => [h.toLowerCase(), h]));
+  const addrOf = (v) => { const m = /<([^<>\s]+@[^<>\s]+)>/.exec(v || '') || /([^\s<>",;]+@[^\s<>",;]+)/.exec(v || ''); return m ? m[1].toLowerCase() : ''; };
+  const domainOf = (a) => (a.includes('@') ? a.split('@').pop().replace(/[>\]]+$/, '') : '');
+  function isPrivateIp(ip) {
+    const p = ip.split('.').map(Number);
+    return p[0] === 10 || p[0] === 127 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 169 && p[1] === 254) || (p[0] === 100 && p[1] >= 64 && p[1] <= 127);
+  }
+  function hopIp(received) {
+    const from = String(received).split(/\sby\s/i)[0];
+    const m = /\[(\d{1,3}(?:\.\d{1,3}){3})\]/.exec(from) || /\b(\d{1,3}(?:\.\d{1,3}){3})\b/.exec(from);
+    return m ? m[1] : '';
+  }
+
+  function loadEml(text, src, startIndex) {
+    const raw = String(text).replace(/^\uFEFF/, '');
+    const { headers } = splitMessage(raw);
+    const hk = new Set(headers.map(([k]) => k.toLowerCase()));
+    if (!hk.has('from') && !hk.has('received') && !hk.has('subject')) return { recs: [], errors: [`${src}: not an email message (no From, Subject or Received header)`] };
+    const acc = { files: [], text: [], html: [] };
+    walkPart(raw, acc, 0);
+    const H = {};
+    for (const [k, v] of headers) {
+      const name = CANON.get(k.toLowerCase()) || k;
+      const val = decodeWords(v).trim();
+      H[name] = H[name] != null ? `${H[name]}\n${val}` : val;
+    }
+    const all = (n) => headers.filter(([k]) => k.toLowerCase() === n.toLowerCase()).map(([, v]) => v);
+    const t = Date.parse(String(H.Date || '').replace(/\s*\([^)]*\)\s*$/, ''));
+    const ev = { '@timestamp': isNaN(t) ? '' : new Date(t).toISOString() };
+    Object.assign(ev, H);
+
+    const from = addrOf(H.From), ret = addrOf(H['Return-Path']), reply = addrOf(H['Reply-To']);
+    const auth = all('Authentication-Results')[0] || '';
+    const res = (k) => { const m = new RegExp(`\\b${k}=([a-z]+)`, 'i').exec(auth); return m ? m[1].toLowerCase() : ''; };
+    let spf = res('spf');
+    if (!spf) { const r = /^\s*([a-z]+)/i.exec(all('Received-SPF')[0] || ''); spf = r ? r[1].toLowerCase() : ''; }
+    const hops = all('Received').map(hopIp);
+    const ips = hops.filter(Boolean);
+    const publicIps = ips.filter((ip) => !isPrivateIp(ip));
+    const origin = publicIps.length ? publicIps[publicIps.length - 1] : ips.length ? ips[ips.length - 1] : (String(H['X-Originating-IP'] || '').replace(/[[\]\s]/g, ''));
+
+    const htmlAll = acc.html.join('\n');
+    const urls = new Set();
+    const addUrl = (u) => { const c = u.replace(/&amp;/g, '&').replace(/[.,;:!?)\]]+$/, ''); if (/^https?:\/\/[^\s/]+/i.test(c)) urls.add(c); };
+    for (const m of htmlAll.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) addUrl(m[1]);
+    for (const m of (acc.text.join('\n') + '\n' + htmlAll).matchAll(/\bhttps?:\/\/[^\s"'<>()]+/gi)) addUrl(m[0]);
+    const urlDomains = new Set([...urls].map((u) => (/^https?:\/\/([^/:?#]+)/i.exec(u) || [])[1]).filter(Boolean).map((d) => d.toLowerCase()));
+    const bodyText = (acc.text.join('\n') || htmlAll.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&'))
+      .replace(/\s+/g, ' ').trim();
+    const dn = /^\s*"?([^"<]*?)"?\s*</.exec(H.From || '');
+
+    Object.assign(ev, {
+      'eml.from_address': from,
+      'eml.from_display_name': dn ? dn[1].trim() : '',
+      'eml.from_domain': domainOf(from),
+      'eml.return_path_domain': domainOf(ret),
+      'eml.reply_to_domain': domainOf(reply),
+      'eml.spf': spf,
+      'eml.dkim': res('dkim'),
+      'eml.dmarc': res('dmarc'),
+      'eml.hops': hops.length,
+      'eml.received_ips': ips.join(', '),
+      'eml.origin_ip': origin,
+      'eml.urls': [...urls].join(', '),
+      'eml.url_domains': [...urlDomains].join(', '),
+      'eml.attachments': acc.files.map((f) => f.name).join(', '),
+      'eml.attachment_types': [...new Set(acc.files.map((f) => f.type))].join(', '),
+      'eml.attachment_sha256': acc.files.map((f) => f.sha256).join(', '),
+      'eml.body': bodyText.length > 20000 ? `${bodyText.slice(0, 20000)}…` : bodyText,
+    });
+    Object.defineProperty(ev, '__sl', { value: mk('email', ['eml'], null, 'Email', 'message'), enumerable: false, writable: true, configurable: true });
+    return { recs: [new Rec(ev, isNaN(t) ? NaN : t, src, startIndex || 0)], errors: [] };
+  }
+
+  // SHA-256 (sync, for attachment hashes). Constants from the first 64 primes, as in FIPS 180-4.
+  let SHA_K = null, SHA_H = null;
+  function sha256(bytes) {
+    if (!SHA_K) {
+      const primes = [];
+      for (let n = 2; primes.length < 64; n++) if (primes.every((p) => n % p)) primes.push(n);
+      const frac = (x) => ((x - Math.floor(x)) * 4294967296) >>> 0;
+      SHA_K = primes.map((p) => frac(Math.cbrt(p)));
+      SHA_H = primes.slice(0, 8).map((p) => frac(Math.sqrt(p)));
+    }
+    const l = bytes.length, nb = ((l + 9 + 63) >> 6) << 6;
+    const m = new Uint8Array(nb);
+    m.set(bytes); m[l] = 0x80;
+    const dv = new DataView(m.buffer);
+    dv.setUint32(nb - 4, (l * 8) >>> 0);
+    dv.setUint32(nb - 8, Math.floor(l / 0x20000000));
+    const h = SHA_H.slice(), w = new Uint32Array(64);
+    const rot = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let o = 0; o < nb; o += 64) {
+      for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+      for (let i = 16; i < 64; i++) {
+        const s0 = rot(w[i - 15], 7) ^ rot(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        const s1 = rot(w[i - 2], 17) ^ rot(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, k] = h;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (k + (rot(e, 6) ^ rot(e, 11) ^ rot(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[i] + w[i]) >>> 0;
+        const t2 = ((rot(a, 2) ^ rot(a, 13) ^ rot(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+        k = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      [a, b, c, d, e, f, g, k].forEach((x, i) => { h[i] = (h[i] + x) >>> 0; });
+    }
+    return h.map((x) => x.toString(16).padStart(8, '0')).join('');
   }
 
   // ───────────────────────── Patterns ─────────────────────────
@@ -375,6 +734,10 @@
 
     function term(tok) {
       const v = tok.value;
+      if (tok.field === '_source_') {
+        const re = new RegExp(`^${v.split('*').map(escRe).join('.*')}$`, 'i');
+        return (r) => { const s = sourceOf(r.ev); return [s.product, s.category, s.label, ...s.services].some((x) => x && re.test(x)); };
+      }
       if (tok.field === '_exists_') {
         const f = resolve(v);
         return (r) => r.ev[f] != null && r.ev[f] !== '';
@@ -499,43 +862,99 @@
     both: { label: 'Sysmon 1 + Security 4688', processCreation: [[CH.sysmon, [1]], [CH.security, [4688]]] },
   };
 
+  const PRODUCT_LABEL = {
+    windows: 'Windows', linux: 'Linux', aws: 'AWS', azure: 'Azure / Entra ID', m365: 'Microsoft 365', gcp: 'Google Cloud',
+    okta: 'Okta', proofpoint: 'Proofpoint', email: 'Email (.eml)', suricata: 'Suricata', zeek: 'Zeek',
+  };
+  // null = any service name is accepted (Suricata event_type, Zeek log name)
+  const PRODUCT_SERVICES = {
+    linux: ['auth', 'sshd', 'sudo', 'cron', 'syslog', 'auditd', 'vsftpd', 'clamav', 'sysmon'],
+    aws: ['cloudtrail'], azure: ['signinlogs', 'auditlogs', 'activitylogs'], m365: ['audit', 'exchange', 'threat_management'],
+    gcp: ['gcp.audit'], okta: ['okta'], proofpoint: ['tap', 'tap_messages', 'tap_clicks'], email: ['eml'], suricata: null, zeek: null,
+  };
+  const GENERIC_CATEGORIES = { proxy: 'Web proxy', webserver: 'Web server', firewall: 'Firewall', dns: 'DNS server' };
+  const LINUX_CATEGORY_IDS = { process_creation: [1], network_connection: [3], process_termination: [5], file_event: [11], file_delete: [23] };
+
   function logsourceFilter(ls, profileName) {
     const profile = PROFILES[profileName] || PROFILES.sysmon;
     const notes = [];
-    if (!ls || typeof ls !== 'object') return { fn: () => true, notes: ['no logsource: rule runs on every event'] };
-    const product = ls.product ? String(ls.product).toLowerCase() : null;
-    const category = ls.category ? String(ls.category).toLowerCase() : null;
-    const service = ls.service ? String(ls.service).toLowerCase() : null;
-    if (product && product !== 'windows') notes.push(`product "${product}" is not mapped: matching on all events`);
+    const noAlias = () => null;
+    if (!ls || typeof ls !== 'object') return { fn: () => true, aliasFor: noAlias, desc: 'all events', notes: ['no logsource: rule runs on every event'] };
+    let product = ls.product ? lc(ls.product) : null;
+    const category = ls.category ? lc(ls.category) : null;
+    const service = ls.service ? lc(ls.service) : null;
+    if (product && !PRODUCT_LABEL[product]) { notes.push(`product "${product}" is not mapped: matching on all events`); product = null; }
 
-    let pairs = null;
+    // proxy / webserver / firewall / dns: recognised by the shape of the event, whatever the vendor
+    if (category && GENERIC_CATEGORIES[category]) {
+      if (product) notes.push(`category "${category}" is recognised by its fields: product "${product}" is not checked`);
+      if (service) notes.push(`service "${service}" is ignored for category "${category}"`);
+      return { fn: (ev) => sourceOf(ev).category === category, aliasFor: noAlias, desc: `${GENERIC_CATEGORIES[category]} events (category ${category})`, notes };
+    }
+
+    const windows = product === 'windows' || (!product && ((category && CATEGORIES[category]) || (service && CH[service])));
+    if (windows) {
+      let pairs = null;
+      if (category) {
+        pairs = category === 'process_creation' ? profile.processCreation : CATEGORIES[category];
+        if (!pairs) notes.push(`category "${category}" is not mapped: matching on all events`);
+      }
+      let svcChannel = null;
+      if (service) {
+        svcChannel = CH[service];
+        if (!svcChannel) notes.push(`service "${service}" is not mapped: ignoring it`);
+      }
+      const sets = pairs ? pairs.map(([ch, ids]) => [ch.toLowerCase(), new Set(ids)]) : null;
+      const svc = svcChannel ? svcChannel.toLowerCase() : null;
+      const onlyProduct = product === 'windows' && !sets && !svc;
+      const aliasFor = (ev) => (String(ev.Channel || '').toLowerCase() === 'security' && Number(ev.EventID) === 4688 ? SECURITY_4688_ALIASES : null);
+      const desc = [
+        sets ? pairs.map(([ch, ids]) => `${ch} EventID ${ids.join('/')}`).join(' or ') : null,
+        svc ? `Channel ${svcChannel}` : null,
+        onlyProduct ? 'Windows events' : null,
+      ].filter(Boolean).join(' and ') || 'all events';
+      return {
+        fn: (ev) => {
+          if (onlyProduct) return sourceOf(ev).product === 'windows';
+          const ch = String(ev.Channel || '').toLowerCase();
+          if (svc && ch !== svc) return false;
+          if (sets) {
+            const id = Number(ev.EventID);
+            return sets.some(([c, ids]) => c === ch && ids.has(id));
+          }
+          return true;
+        },
+        aliasFor,
+        desc,
+        notes,
+      };
+    }
+
+    if (!product) {
+      if (category) notes.push(`category "${category}" is not mapped: matching on all events`);
+      if (service) notes.push(`service "${service}" is not mapped: ignoring it`);
+      return { fn: () => true, aliasFor: noAlias, desc: 'all events', notes };
+    }
+
+    // another product: Linux, cloud, identity, email, network sensors
+    const known = PRODUCT_SERVICES[product];
+    let svc = service;
+    if (svc && known && !known.includes(svc)) { notes.push(`service "${svc}" is not mapped for ${product}: ignoring it`); svc = null; }
+    let ids = null;
     if (category) {
-      pairs = category === 'process_creation' ? profile.processCreation : CATEGORIES[category];
-      if (!pairs) notes.push(`category "${category}" is not mapped: matching on all events`);
+      if (product === 'linux' && LINUX_CATEGORY_IDS[category]) ids = new Set(LINUX_CATEGORY_IDS[category]);
+      else notes.push(`category "${category}" is not mapped for ${product}: ignoring it`);
     }
-    let svcChannel = null;
-    if (service) {
-      svcChannel = CH[service];
-      if (!svcChannel) notes.push(`service "${service}" is not mapped: ignoring it`);
-    }
-    const sets = pairs ? pairs.map(([ch, ids]) => [ch.toLowerCase(), new Set(ids)]) : null;
-    const svc = svcChannel ? svcChannel.toLowerCase() : null;
-    const aliasFor = (ev) => (String(ev.Channel || '').toLowerCase() === 'security' && Number(ev.EventID) === 4688 ? SECURITY_4688_ALIASES : null);
-    const desc = [
-      sets ? pairs.map(([ch, ids]) => `${ch} EventID ${ids.join('/')}`).join(' or ') : null,
-      svc ? `Channel ${svcChannel}` : null,
-    ].filter(Boolean).join(' and ') || 'all events';
+    const desc = [`${PRODUCT_LABEL[product]} events`, svc ? `service ${svc}` : null, ids ? `Sysmon for Linux EventID ${[...ids].join('/')}` : null].filter(Boolean).join(' · ');
     return {
       fn: (ev) => {
-        const ch = String(ev.Channel || '').toLowerCase();
-        if (svc && ch !== svc) return false;
-        if (sets) {
-          const id = Number(ev.EventID);
-          return sets.some(([c, ids]) => c === ch && ids.has(id));
-        }
+        const s = sourceOf(ev);
+        if (s.product !== product) return false;
+        if (svc && !s.services.includes(svc)) return false;
+        if (ids && !(s.services.includes('sysmon') && ids.has(Number(ev.EventID)))) return false;
         return true;
       },
-      aliasFor,
+      aliasFor: noAlias,
       desc,
       notes,
     };
@@ -760,7 +1179,7 @@
   }
 
   return {
-    SLError, parseYaml, parseYamlDocs, loadEvents, normalizeEvent, parseTime,
-    compileQuery, compileRule, runRule, buildFieldIndex, PROFILES, CATEGORIES, CHANNELS: CH,
+    SLError, parseYaml, parseYamlDocs, loadEvents, loadEml, normalizeEvent, parseTime, sourceOf, sha256,
+    compileQuery, compileRule, runRule, buildFieldIndex, PROFILES, CATEGORIES, CHANNELS: CH, SOURCES,
   };
 });
