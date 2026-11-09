@@ -21,7 +21,7 @@
   const state = {
     recs: [], sources: [], fieldIndex: new Map(), profile: 'sysmon',
     results: [], sortDesc: false, shown: PAGE, open: new Set(),
-    extraCols: [], openField: null,
+    extraCols: [], autoCols: [], autoHidden: new Set(), openField: null, autoProfile: false,
     rules: [], editing: null, sigmaHits: [], sigmaShown: PAGE, sigmaOpen: new Set(),
   };
 
@@ -139,6 +139,7 @@
     for (const r of recs) state.recs.push(r);
     state.sources.push({ name, count: recs.length });
     state.fieldIndex = SL.buildFieldIndex(state.recs);
+    autoSetup();
     if (errors.length) console.warn(errors);
     busy();
     return { count: recs.length, errors };
@@ -283,16 +284,78 @@
     runSearch();
   }
 
-  function cols() { return ['Time', 'Source', 'ID', ...state.extraCols, 'Details']; }
+  // ───────── automatic columns ─────────
+  // The same fact has a different field name in every source. These virtual columns pick the
+  // right one per event, so a mixed dataset (Windows + Linux + cloud…) still lines up.
+  const AUTO_COLS = {
+    Host: ['Computer', 'host.name', 'hostname', 'host', '_HOSTNAME', 'node', 'dvc', 's-computername'],
+    User: ['User', 'TargetUserName', 'SubjectUserName', 'UserPrincipalName', 'userPrincipalName', 'userIdentity.userName', 'userIdentity.arn',
+      'UserId', 'actor.alternateId', 'protoPayload.authenticationInfo.principalEmail', 'user', 'acct', 'cs-username', 'recipient', 'eml.from'],
+    'Source IP': ['IpAddress', 'SourceIp', 'sourceIPAddress', 'IPAddress', 'ipAddress', 'ClientIP', 'client.ipAddress',
+      'protoPayload.requestMetadata.callerIp', 'src_ip', 'src', 'id.orig_h', 'c-ip', 'clickIP', 'senderIP', 'eml.origin_ip', 'addr'],
+  };
+  const empty = (v) => v == null || v === '' || v === '-' || v === '?' || v === '::1' || v === '127.0.0.1';
+  // Linux syslog keeps the user and the IP inside the message text (sshd and friends).
+  const MSG_IP = /\bfrom\s+(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7})(?=[\s:]|$)/i;
+  const MSG_USER = /\b(?:for|user)\s+(?:invalid user\s+)?([\w.$@-]+)\s+from\b/i;
+  function autoValue(ev, col) {
+    for (const f of AUTO_COLS[col]) if (!empty(ev[f])) return ev[f];
+    if (col !== 'Host' && SL.sourceOf(ev).product === 'linux') {
+      const m = String(ev.MESSAGE ?? ev.message ?? ev.msg ?? '').match(col === 'User' ? MSG_USER : MSG_IP);
+      if (m && !empty(m[1])) return m[1];
+    }
+    return '';
+  }
+  // Only the columns that most events can fill (at least 5 % of what is loaded).
+  function pickAutoCols() {
+    const sample = state.recs.length > 20000 ? state.recs.slice(0, 20000) : state.recs;
+    const min = Math.max(1, sample.length * 0.05);
+    return Object.keys(AUTO_COLS).filter((col) => {
+      let n = 0;
+      for (const r of sample) if (autoValue(r.ev, col) !== '' && ++n >= min) return true;
+      return false;
+    });
+  }
+  // Mapping: process_creation reads whatever process events the data has.
+  function pickProfile() {
+    let sys1 = 0, sec4688 = 0;
+    for (const r of state.recs) {
+      const ch = String(r.ev.Channel || '').toLowerCase(), id = Number(r.ev.EventID);
+      if (id === 1 && ch === 'microsoft-windows-sysmon/operational') sys1++;
+      else if (id === 4688 && ch === 'security') sec4688++;
+    }
+    if (sys1 && sec4688) return 'both';
+    if (sec4688) return 'security';
+    if (sys1) return 'sysmon';
+    return null;
+  }
+  function autoSetup() {
+    state.autoCols = pickAutoCols().filter((c) => !state.autoHidden.has(c));
+    const p = pickProfile();
+    if (p && SL.PROFILES[p]) {
+      state.autoProfile = true;
+      if (p !== state.profile) {
+        state.profile = p;
+        $('profile').value = p;
+        compileRules(); renderRules();
+      }
+    }
+    $('profile').title = state.autoProfile
+      ? 'Chosen automatically from the loaded events. Which events Sigma\'s process_creation category reads.'
+      : 'Which events Sigma\'s process_creation category reads';
+  }
+
+  function cols() { return ['Time', 'Source', 'ID', ...state.autoCols, ...state.extraCols, 'Details']; }
 
   function rowsHtml(recs, shown, openSet, actions) {
     const c = cols();
-    let html = `<table class="tbl"><thead><tr>${c.map((h) => `<th${h === 'Time' ? ' class="sortable" data-sort="1" title="Sort by time"' : ''}>${esc(h)}${h === 'Time' ? (state.sortDesc ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>`;
+    let html = `<table class="tbl"><thead><tr>${c.map((h) => `<th${h === 'Time' ? ' class="sortable" data-sort="1" title="Sort by time"' : ''}>${esc(h)}${h === 'Time' ? (state.sortDesc ? ' ↓' : ' ↑') : ''}${state.autoCols.includes(h) ? ` <button class="ib colx" data-autocol="${esc(h)}" title="Column added automatically from each event's source. Click to hide it.">×</button>` : ''}</th>`).join('')}</tr></thead><tbody>`;
     for (const r of recs.slice(0, shown)) {
       const ev = r.ev;
       const det = String(details(ev) ?? '');
       const open = openSet.has(r.i);
       html += `<tr class="row${open ? ' open' : ''}" data-i="${r.i}"><td class="time">${esc(fmtTime(r.t))}</td><td><span class="chan">${esc(srcLabel(ev))}</span></td><td>${esc(srcId(ev))}</td>`;
+      for (const col of state.autoCols) { const v = String(autoValue(ev, col)); html += `<td class="det auto" title="${esc(v)}">${esc(v)}</td>`; }
       for (const f of state.extraCols) html += `<td class="det">${esc(ev[f] ?? '')}</td>`;
       html += `<td class="det">${esc(det.length > 400 ? det.slice(0, 400) + '…' : det)}</td></tr>`;
       if (open) {
@@ -328,6 +391,13 @@
     container.addEventListener('click', (e) => {
       const more = e.target.closest('[data-more]');
       if (more) { onPage(); return; }
+      const colx = e.target.closest('[data-autocol]');
+      if (colx) {
+        state.autoHidden.add(colx.dataset.autocol);
+        state.autoCols = state.autoCols.filter((c) => c !== colx.dataset.autocol);
+        renderResults(); renderSigmaHits();
+        return;
+      }
       if (e.target.closest('[data-sort]')) {
         state.sortDesc = !state.sortDesc;
         sortRecs(state.results, state.sortDesc);
@@ -355,11 +425,11 @@
 
   function exportCsv() {
     const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const lines = [['Time (UTC)', 'Source', 'ID', 'Host', ...state.extraCols, 'Details', 'File'].map(q).join(',')];
+    const auto = ['Host', ...state.autoCols.filter((c) => c !== 'Host')];
+    const lines = [['Time (UTC)', 'Source', 'ID', ...auto, ...state.extraCols, 'Details', 'File'].map(q).join(',')];
     for (const r of state.results) {
       const ev = r.ev;
-      const host = ev.Computer ?? ev.host ?? ev.hostname ?? ev._HOSTNAME ?? '';
-      lines.push([fmtTime(r.t), srcLabel(ev), srcId(ev), host, ...state.extraCols.map((k) => ev[k]), details(ev), r.src].map(q).join(','));
+      lines.push([fmtTime(r.t), srcLabel(ev), srcId(ev), ...auto.map((c) => autoValue(ev, c)), ...state.extraCols.map((k) => ev[k]), details(ev), r.src].map(q).join(','));
     }
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -481,6 +551,8 @@ level: medium
 
     prof.addEventListener('change', () => {
       state.profile = prof.value;
+      state.autoProfile = false;
+      prof.title = "Which events Sigma's process_creation category reads";
       try { localStorage.setItem('sigmalens.profile', state.profile); } catch (e) { /* storage blocked */ }
       compileRules(); renderRules();
       if (state.view === 'sigma') runEditor();

@@ -160,6 +160,7 @@
       </dl>
       <h3>Reading the results table</h3>
       <p>Each row shows the time, the log it came from (<span class="chan">Sysmon</span>, <span class="chan">Security</span>, <span class="chan">PowerShell</span>…), the event ID and a <b>Details</b> summary chosen per event type: the command line for a process, <code>Image → IP:port</code> for a connection, the query for DNS, the key and value for the registry, the script for PowerShell 4104.</p>
+      <p>When you load data, SigmaLens also adds the <b>Host</b>, <b>User</b> and <b>Source IP</b> columns if most events have them. Every source names these fields differently (<code>Computer</code>, <code>_HOSTNAME</code>, <code>userIdentity.arn</code>, <code>sourceIPAddress</code>, <code>ClientIP</code>…), so each cell is filled from the right field for that event. That way a mixed dataset still lines up. Click <kbd>×</kbd> in a column header to hide it. These columns are also exported to CSV.</p>
       <p>Click a row to see <b>every field</b>. Next to each value you'll find three buttons:</p>
       <ul>
         <li><kbd>+</kbd> keeps only events with this value: it adds <code>Field:"value"</code> to the search.</li>
@@ -257,7 +258,7 @@ level: medium</pre>
       <h3>Other sources</h3>
       <p>Events that are not Windows are recognised by the fields they have, so no configuration is needed. This is what each <code>logsource</code> reads. A rule for <code>product: aws</code> only reads CloudTrail events, even if the same session also holds Windows or Linux logs. The <b>Source</b> column of the results shows what each event was recognised as, and you can search by it with <code>_source_:</code>, for example <code>_source_:linux</code>, <code>_source_:sshd</code> or <code>_source_:proxy</code>.</p>
       <div id="sourcetable"></div>
-      <p>The <b>Mapping</b> selector in the top bar changes what <code>process_creation</code> reads:</p>
+      <p>The <b>Mapping</b> selector in the top bar changes what <code>process_creation</code> reads. It is <b>chosen automatically</b> when you load data: Sysmon if the logs have Sysmon event 1, Security if they have 4688, or both if they have both. You can still change it by hand.</p>
       <ul>
         <li><b>Sysmon</b> (default): Sysmon event 1.</li>
         <li><b>Security</b>: Security event 4688. <code>Image</code>, <code>ParentImage</code>, <code>ProcessId</code> and <code>User</code> are filled from <code>NewProcessName</code>, <code>ParentProcessName</code>, <code>NewProcessId</code> and <code>SubjectDomainName\SubjectUserName</code>. Fields that only Sysmon has (<code>OriginalFileName</code>, <code>Hashes</code>…) stay empty.</li>

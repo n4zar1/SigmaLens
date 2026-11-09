@@ -188,3 +188,5 @@ dialog td:first-child { font-family: var(--mono); font-size: 12.5px; white-space
   .split .fields { max-height: 220px; }
   .sigma .panel:first-child { min-height: 360px; }
 }
+.tbl td.auto { white-space: nowrap; max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+.tbl th .colx { width: 18px; height: 18px; font-size: 11px; margin-left: 4px; vertical-align: 1px; }

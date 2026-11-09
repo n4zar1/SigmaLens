@@ -8,6 +8,7 @@ SigmaLens gives you the hunting workflow of a SIEM in a browser tab: a search ba
 
 ## Features
 - **Search** with a Lucene-like syntax: `EventID:1 AND Image:*\powershell.exe AND NOT User:*SYSTEM`, wildcards, phrases, numeric comparisons, `_exists_:`.
+- **Automatic setup**: when you load data, the Host, User and Source IP columns are filled from the right field for each source, and the process_creation mapping (Sysmon 1, Security 4688 or both) is chosen from the events you have.
 - **Timeline histogram** (click a bar to zoom), **field statistics** with top values, one-click include/exclude filters and extra columns.
 - **Sigma editor** with live matching: maps and lists, keyword lists, `condition` with `and/or/not`, parentheses, `1 of x*`, `all of them`, and the modifiers `contains startswith endswith all re i m s cased exists gt gte lt lte cidr windash`.
 - **Many log sources, recognised automatically** by the fields each event has: Windows, Linux (syslog, journald, auditd, Sysmon for Linux), AWS CloudTrail, Entra ID sign-ins and audit logs, Azure activity, Microsoft 365 audit, Google Cloud audit, Okta, Proofpoint TAP, Suricata EVE, Zeek, web proxy, web server, firewall and DNS logs. A rule with `product: aws` / `service: cloudtrail`, `product: linux` / `service: sshd`, `category: proxy` and so on only reads those events. Search by source with `_source_:linux`.
