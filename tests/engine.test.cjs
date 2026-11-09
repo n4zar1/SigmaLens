@@ -111,3 +111,16 @@ test('sigma: logsource mapping and Security 4688 aliases', () => {
   const svc = { logsource: { product: 'windows', service: 'security' }, detection: { s: { EventID: 4688 }, condition: 's' } };
   assert.equal(hits(svc, rs), 1);
 });
+
+test('search: field names that differ only in case are all searched', () => {
+  const rs = recs(
+    { '@timestamp': '2026-01-05T10:00:00Z', Channel: 'Security', EventID: 4624, IpAddress: '192.0.2.7' },
+    { TimeGenerated: '2026-01-05T10:01:00Z', Type: 'SigninLogs', UserPrincipalName: 'a@x.example', ResultType: '0', AppDisplayName: 'OfficeHome', IPAddress: '203.0.113.66' },
+  );
+  const idx = SL.buildFieldIndex(rs);
+  const n = (q) => rs.filter(SL.compileQuery(q, idx)).length;
+  assert.equal(n('IPAddress:"203.0.113.66"'), 1);
+  assert.equal(n('ipaddress:"192.0.2.7"'), 1);
+  assert.equal(n('IpAddress:*'), 2);
+  assert.equal(n('_exists_:IPADDRESS'), 2);
+});

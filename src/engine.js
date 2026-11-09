@@ -730,7 +730,13 @@
     const toks = tokenizeQuery(query);
     let p = 0;
     const peek = () => toks[p];
-    const resolve = (f) => (fieldIndex && fieldIndex.get(f.toLowerCase())) || f;
+    // Every real field name that matches (case-insensitive); the name as typed if none is known.
+    const resolve = (f) => {
+      const known = fieldIndex && fieldIndex.get(f.toLowerCase());
+      if (!known) return [f];
+      return Array.isArray(known) ? known : [known];
+    };
+    const values = (r, fs) => { const out = []; for (const f of fs) { const x = r.ev[f]; if (x != null && x !== '') out.push(x); } return out; };
 
     function term(tok) {
       const v = tok.value;
@@ -739,8 +745,8 @@
         return (r) => { const s = sourceOf(r.ev); return [s.product, s.category, s.label, ...s.services].some((x) => x && re.test(x)); };
       }
       if (tok.field === '_exists_') {
-        const f = resolve(v);
-        return (r) => r.ev[f] != null && r.ev[f] !== '';
+        const fs = resolve(v);
+        return (r) => values(r, fs).length > 0;
       }
       if (!tok.field) {
         if (v.includes('*')) {
@@ -750,24 +756,23 @@
         const want = v.toLowerCase();
         return (r) => r.text().includes(want);
       }
-      const f = resolve(tok.field);
+      const fs = resolve(tok.field);
       const cmp = !tok.quoted && /^(>=|<=|>|<)(.+)$/.exec(v);
       if (cmp) {
         const op = cmp[1], raw = cmp[2], num = Number(raw);
         const useNum = !isNaN(num);
-        return (r) => {
-          const x = r.ev[f];
-          if (x == null || x === '') return false;
+        const test = (x) => {
           const a = useNum ? Number(x) : String(x), b = useNum ? num : raw;
           if (useNum && isNaN(a)) return false;
           return op === '>' ? a > b : op === '<' ? a < b : op === '>=' ? a >= b : a <= b;
         };
+        return (r) => values(r, fs).some(test);
       }
-      if (v === '*' && !tok.quoted) return (r) => r.ev[f] != null && r.ev[f] !== '';
+      if (v === '*' && !tok.quoted) return (r) => values(r, fs).length > 0;
       const m = v.includes('*')
         ? (() => { const re = new RegExp(`^${v.split('*').map(escRe).join('.*')}$`, 'is'); return (x) => re.test(x); })()
         : (() => { const want = v.toLowerCase(); return (x) => x.toLowerCase() === want; })();
-      return (r) => { const x = r.ev[f]; return x != null && m(String(x)); };
+      return (r) => values(r, fs).some((x) => m(String(x)));
     }
 
     function parseOr() {
@@ -1171,8 +1176,12 @@
     const idx = new Map();
     for (const r of recs) {
       for (const k of Object.keys(r.ev)) {
+        // Field names are case-insensitive in searches. Different sources may spell the same name
+        // differently (Windows IpAddress, Entra ID IPAddress), so keep every spelling.
         const lk = k.toLowerCase();
-        if (!idx.has(lk)) idx.set(lk, k);
+        const all = idx.get(lk);
+        if (!all) idx.set(lk, [k]);
+        else if (!all.includes(k)) all.push(k);
       }
     }
     return idx;
