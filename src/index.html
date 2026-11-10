@@ -58,12 +58,15 @@
     </div>
     <div class="err" id="qerr" hidden></div>
     <div class="histo" id="histo"></div>
+    <div class="rsz h" data-rsz="histo" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize · double-click to reset"></div>
     <div class="split">
       <aside class="panel fields">
         <div class="panel-h">Fields <span class="muted" id="fieldcount"></span></div>
+        <div class="factive" id="factive" hidden></div>
         <div style="padding:8px 8px 6px"><input id="ffilter" placeholder="Filter fields" aria-label="Filter fields"></div>
         <div class="panel-b" id="fields"></div>
       </aside>
+      <div class="rsz v" data-rsz="fields" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize · double-click to reset"></div>
       <div class="panel">
         <div class="panel-h"><span id="rescount">0 events</span>
           <div class="tools"><button class="btn sm" id="export">Export CSV</button></div>
@@ -85,8 +88,10 @@
           </div>
         </div>
         <div class="ed-wrap"><div class="gutter" id="gutter">1</div><textarea class="ed" id="editor" spellcheck="false" autocomplete="off" aria-label="Sigma rule editor"></textarea></div>
+        <div class="rsz h" data-rsz="rule" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize · double-click to reset"></div>
         <div class="ruleinfo" id="ruleinfo"></div>
       </div>
+      <div class="rsz v" data-rsz="sigma" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize · double-click to reset"></div>
       <div class="panel">
         <div class="panel-h"><span class="hitcount zero" id="hitcount">–</span><span class="muted" id="hitlabel">Run a rule to see its matches</span>
           <div class="tools"><button class="btn sm" id="hits2search" title="Open these events in Search">Show in Search</button></div>

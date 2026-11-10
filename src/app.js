@@ -21,7 +21,7 @@
   const state = {
     recs: [], sources: [], fieldIndex: new Map(), profile: 'sysmon',
     results: [], sortDesc: false, shown: PAGE, open: new Set(),
-    extraCols: [], autoCols: [], autoHidden: new Set(), openField: null, autoProfile: false,
+    extraCols: [], autoCols: [], autoHidden: new Set(), openField: null, autoProfile: false, histIdx: null,
     rules: [], editing: null, sigmaHits: [], sigmaShown: PAGE, sigmaOpen: new Set(),
   };
 
@@ -235,7 +235,12 @@
     let lo = Infinity, hi = -Infinity;
     for (const t of ts) { if (t < lo) lo = t; if (t > hi) hi = t; }
     const span = Math.max(hi - lo, 1000);
-    const step = INTERVALS.find((s) => span / s <= 80) || INTERVALS[INTERVALS.length - 1];
+    // Auto picks ~80 bars; − / + step through finer or coarser buckets (never more than 1500 bars).
+    let idx = state.histIdx ?? INTERVALS.findIndex((s) => span / s <= 80);
+    if (idx < 0) idx = INTERVALS.length - 1;
+    while (idx < INTERVALS.length - 1 && span / INTERVALS[idx] > 1500) idx++;
+    const step = INTERVALS[idx];
+    const finer = idx > 0 && span / INTERVALS[idx - 1] <= 1500, coarser = idx < INTERVALS.length - 1;
     const start = Math.floor(lo / step) * step;
     const n = Math.floor((hi - start) / step) + 1;
     const counts = new Array(n).fill(0);
@@ -247,16 +252,63 @@
       : '').join('');
     const label = step >= 86400000 ? `${step / 86400000} d` : step >= 3600000 ? `${step / 3600000} h` : step >= 60000 ? `${step / 60000} min` : `${step / 1000} s`;
     box.innerHTML = `<svg viewBox="0 0 1000 64" preserveAspectRatio="none" role="img" aria-label="Events over time">${bars}</svg>
-      <div class="axis"><span>${esc(fmtTime(start).slice(0, 19))}</span><span>${label} per bar · click a bar to zoom</span><span>${esc(fmtTime(start + n * step).slice(0, 19))}</span></div>`;
+      <div class="axis"><span>${esc(fmtTime(start).slice(0, 19))}</span><span class="hstep"><button class="ib" data-h="-1" title="Smaller buckets (more bars)"${finer ? '' : ' disabled'}>−</button><span>${label} per bar${state.histIdx == null ? ' (auto)' : ''}</span><button class="ib" data-h="1" title="Bigger buckets (fewer bars)"${coarser ? '' : ' disabled'}>+</button>${state.histIdx == null ? '' : '<button class="btn sm" data-h="0" title="Back to automatic">auto</button>'}<span>· click a bar to zoom</span></span><span>${esc(fmtTime(start + n * step).slice(0, 19))}</span></div>`;
     box.querySelectorAll('rect.bar').forEach((el) => el.addEventListener('click', () => {
       const i = Number(el.dataset.i);
       $('from').value = toLocalInput(start + i * step);
       $('to').value = toLocalInput(start + (i + 1) * step - 1);
+      state.histIdx = null;
       runSearch();
+    }));
+    box.querySelectorAll('[data-h]').forEach((b) => b.addEventListener('click', () => {
+      const d = Number(b.dataset.h);
+      state.histIdx = d === 0 ? null : Math.min(INTERVALS.length - 1, Math.max(0, idx + d));
+      renderHisto();
     }));
   }
 
+  // Top-level parts of the query joined by AND (quotes and parentheses respected).
+  function splitAnd(q) {
+    const parts = [];
+    let depth = 0, inQ = false, start = 0;
+    for (let i = 0; i < q.length; i++) {
+      const c = q[i];
+      if (inQ) { if (c === '\\') i++; else if (c === '"') inQ = false; continue; }
+      if (c === '"') inQ = true;
+      else if (c === '(') depth++;
+      else if (c === ')') depth--;
+      else if (depth === 0 && /\s/.test(c)) {
+        const m = /^\s+AND\s+/i.exec(q.slice(i));
+        if (m) { parts.push(q.slice(start, i)); i += m[0].length - 1; start = i + 1; }
+      }
+    }
+    parts.push(q.slice(start));
+    return parts.map((s) => s.trim()).filter(Boolean);
+  }
+  const TERM_RE = /^(NOT\s+)?([^\s:()"]+):"((?:[^"\\]|\\.)*)"$/i;
+  const filterTerm = (field, value, negate) => `${negate ? 'NOT ' : ''}${field}:"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // The field:"value" filters in the current query (the ones + / − add).
+  function activeFilters() {
+    return splitAnd($('q').value).map((p) => p.match(TERM_RE)).filter(Boolean)
+      .map((m) => ({ raw: m[0], neg: !!m[1], field: m[2], value: m[3].replace(/\\(.)/g, '$1') }));
+  }
+  function setParts(parts) {
+    $('q').value = parts.join(' AND ');
+    show('search');
+    runSearch();
+  }
+  function removeFilter(raw) { setParts(splitAnd($('q').value).filter((p) => p !== raw)); }
+
+  function renderFilters() {
+    const fl = activeFilters();
+    $('factive').innerHTML = fl.map((f, i) => `<div class="fchip${f.neg ? ' neg' : ''}" title="${esc(f.raw)}"><span class="fk">${esc(f.field)}</span><span class="op">${f.neg ? '≠' : '='}</span><span class="fv">${esc(f.value)}</span><button class="ib" data-i="${i}" title="Remove this filter" aria-label="Remove filter ${esc(f.raw)}">×</button></div>`).join('');
+    $('factive').hidden = !fl.length;
+    return fl;
+  }
+
   function renderFields() {
+    const fl = renderFilters();
+    const filtered = new Set(fl.map((f) => f.field));
     const counts = new Map();
     const sample = state.results.length > 20000 ? state.results.slice(0, 20000) : state.results;
     for (const r of sample) for (const k of Object.keys(r.ev)) counts.set(k, (counts.get(k) || 0) + 1);
@@ -268,7 +320,7 @@
     $('fields').innerHTML = names.map((k) => {
       const isCol = state.extraCols.includes(k);
       const open = state.openField === k;
-      return `<div class="field${isCol ? ' col' : ''}" data-f="${esc(k)}"><button type="button" aria-expanded="${open}"><span>${esc(k)}</span><span>${pct(counts.get(k))}</span></button>${open ? topValues(k) : ''}</div>`;
+      return `<div class="field${isCol ? ' col' : ''}${filtered.has(k) ? ' filt' : ''}" data-f="${esc(k)}"><button type="button" aria-expanded="${open}"><span>${esc(k)}</span><span>${pct(counts.get(k))}</span></button>${open ? topValues(k) : ''}</div>`;
     }).join('') || '<div class="muted" style="padding:10px">No fields.</div>';
   }
 
@@ -281,15 +333,25 @@
       m.set(s, (m.get(s) || 0) + 1);
     }
     const top = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    // Values already filtered on stay listed (an excluded value has 0 events left) so they can be undone here.
+    const fl = activeFilters().filter((f) => f.field === field);
+    for (const f of fl) if (!top.some(([v]) => v === f.value)) top.push([f.value, m.get(f.value) || 0]);
+    const on = (v, neg) => fl.some((f) => f.value === v && f.neg === neg);
+    const btn = (v, neg) => on(v, neg)
+      ? `<button class="ib on" data-act="${neg ? 'exc' : 'inc'}" title="Remove this filter">${neg ? '−' : '+'}</button>`
+      : `<button class="ib" data-act="${neg ? 'exc' : 'inc'}" title="${neg ? 'Filter out this value' : 'Filter for this value'}">${neg ? '−' : '+'}</button>`;
     const isCol = state.extraCols.includes(field);
-    return `<div class="vals">${top.map(([v, c]) => `<div class="val" data-v="${esc(v)}"><span class="v" title="${esc(v)}">${esc(v)}</span><span class="n">${fmtN(c)}</span>
-      <button class="ib" data-act="inc" title="Filter for this value">+</button><button class="ib" data-act="exc" title="Filter out this value">−</button></div>`).join('')}
+    return `<div class="vals">${top.map(([v, c]) => `<div class="val${on(v, true) ? ' excl' : ''}" data-v="${esc(v)}"><span class="v" title="${esc(v)}">${esc(v)}</span><span class="n">${fmtN(c)}</span>
+      ${btn(v, false)}${btn(v, true)}</div>`).join('')}
       <div style="margin-top:6px;display:flex;gap:6px"><button class="btn sm" data-act="col">${isCol ? 'Remove column' : 'Add as column'}</button><span class="muted" style="font-size:11.5px;align-self:center">${fmtN(m.size)} distinct</span></div></div>`;
   }
 
+  // + / − add the filter; pressing the same button again removes it, and the opposite one swaps it.
   function addFilter(field, value, negate) {
-    const v = String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const term = `${negate ? 'NOT ' : ''}${field}:"${v}"`;
+    const term = filterTerm(field, value, negate), other = filterTerm(field, value, !negate);
+    const parts = splitAnd($('q').value);
+    if (parts.includes(term)) { setParts(parts.filter((p) => p !== term)); return; }
+    if (parts.includes(other)) { setParts(parts.map((p) => (p === other ? term : p))); return; }
     const cur = $('q').value.trim();
     $('q').value = cur ? `${cur} AND ${term}` : term;
     show('search');
@@ -547,6 +609,52 @@ level: medium
   }
 
   // ───────── wiring ─────────
+  // Drag (or arrow keys) on the bars between panels; double-click resets. Sizes are remembered.
+  function initResizers() {
+    const split = document.querySelector('.split'), sigma = document.querySelector('.sigma');
+    const histo = $('histo'), info = $('ruleinfo');
+    const cfg = {
+      fields: { axis: 'x', dir: 1, get: () => split.firstElementChild.getBoundingClientRect().width, min: 150, max: () => split.clientWidth - 320,
+        set: (px) => split.style.setProperty('--fields-w', px == null ? '' : `${px}px`) },
+      sigma: { axis: 'x', dir: 1, get: () => sigma.firstElementChild.getBoundingClientRect().width, min: 300, max: () => sigma.clientWidth - 260,
+        set: (px) => sigma.style.setProperty('--sigma-w', px == null ? '' : `${px}px`) },
+      histo: { axis: 'y', dir: 1, get: () => histo.getBoundingClientRect().height, min: 60, max: () => 420,
+        set: (px) => { histo.style.height = px == null ? '' : `${px}px`; } },
+      rule: { axis: 'y', dir: -1, get: () => info.getBoundingClientRect().height, min: 28, max: () => info.parentElement.clientHeight - 140,
+        set: (px) => { info.style.height = px == null ? '' : `${px}px`; info.style.maxHeight = px == null ? '' : 'none'; } },
+    };
+    const store = (k, v) => { try { if (v == null) localStorage.removeItem(`sigmalens.size.${k}`); else localStorage.setItem(`sigmalens.size.${k}`, String(Math.round(v))); } catch (e) { /* storage blocked */ } };
+    const clamp = (c, v) => Math.max(c.min, Math.min(Math.max(c.min, c.max()), v));
+    document.querySelectorAll('[data-rsz]').forEach((bar) => {
+      const k = bar.dataset.rsz, c = cfg[k];
+      try { const v = Number(localStorage.getItem(`sigmalens.size.${k}`)); if (v > 0) c.set(v); } catch (e) { /* storage blocked */ }
+      bar.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        bar.setPointerCapture(e.pointerId);
+        const p0 = c.axis === 'x' ? e.clientX : e.clientY, s0 = c.get();
+        document.body.classList.add(c.axis === 'x' ? 'resizing-x' : 'resizing-y');
+        bar.classList.add('drag');
+        let last = s0;
+        const move = (ev) => { last = clamp(c, s0 + ((c.axis === 'x' ? ev.clientX : ev.clientY) - p0) * c.dir); c.set(last); };
+        const up = () => {
+          bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up);
+          document.body.classList.remove('resizing-x', 'resizing-y'); bar.classList.remove('drag');
+          store(k, last);
+        };
+        bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
+      });
+      bar.addEventListener('dblclick', () => { c.set(null); store(k, null); });
+      bar.addEventListener('keydown', (e) => {
+        const d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+        if (!d) return;
+        e.preventDefault();
+        const v = clamp(c, c.get() + d * c.dir * (e.shiftKey ? 64 : 16));
+        c.set(v); store(k, v);
+      });
+    });
+  }
+
   function init() {
     const prof = $('profile');
     prof.innerHTML = Object.entries(SL.PROFILES).map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`).join('');
@@ -589,6 +697,10 @@ level: medium
     $('ffilter').addEventListener('input', renderFields);
     $('export').addEventListener('click', exportCsv);
 
+    $('factive').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-i]');
+      if (b) removeFilter(activeFilters()[Number(b.dataset.i)].raw);
+    });
     $('fields').addEventListener('click', (e) => {
       const fieldEl = e.target.closest('.field');
       if (!fieldEl) return;
@@ -606,6 +718,7 @@ level: medium
       if (e.target.closest('.field > button')) { state.openField = state.openField === f ? null : f; renderFields(); }
     });
 
+    initResizers();
     bindTable($('results'), () => state.results, state.open, renderResults, () => { state.shown += PAGE; renderResults(); });
     bindTable($('sigma-results'), () => state.sigmaHits, state.sigmaOpen, renderSigmaHits, () => { state.sigmaShown += PAGE; renderSigmaHits(); });
 
