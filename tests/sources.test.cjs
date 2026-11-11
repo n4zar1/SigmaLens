@@ -199,4 +199,10 @@ test('eml: headers, authentication results, hops, URLs and attachments', () => {
   const r = rule({ product: 'email', service: 'eml' }, { 'eml.spf': 'fail', 'eml.attachments|endswith': ['.xlsm', '.docm'] });
   assert.equal(SL.runRule(SL.compileRule(r), recs).length, 1);
   assert.match(SL.loadEml('just text', 'x.eml').errors[0], /not an email/);
+
+  // Parsed emails saved as JSONL and loaded back are still recognised as email.
+  const back = load(...recs.map((x) => x.ev));
+  assert.equal(back.length, 1);
+  assert.equal(SL.sourceOf(back[0].ev).product, 'email');
+  assert.equal(SL.runRule(SL.compileRule(r), back).length, 1);
 });

@@ -938,6 +938,8 @@ level: medium</pre>
       const click = has(ev, 'clickTime') || /^clicks/.test(String(ev.tap_event || ''));
       return mk('proofpoint', ['tap', click ? 'tap_clicks' : 'tap_messages'], null, 'Proofpoint TAP', ev.tap_event || (click ? 'click' : 'message'));
     }
+    // Emails already parsed into JSON/JSONL (the eml.* fields loadEml produces): lets several .eml travel as one dataset.
+    if (has(ev, 'eml.from_address') || has(ev, 'eml.from_domain')) return mk('email', ['eml'], null, 'Email', 'message');
     if (has(ev, 'event_type') && (ev.flow_id != null || (has(ev, 'src_ip') && has(ev, 'dest_ip')))) {
       const t = lc(ev.event_type);
       return mk('suricata', [t], null, 'Suricata', t === 'alert' && ev['alert.signature_id'] != null ? `alert ${ev['alert.signature_id']}` : t);
